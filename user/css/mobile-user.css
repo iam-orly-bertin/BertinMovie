@@ -1,0 +1,1104 @@
+/* =========================================================
+   MOBILE-USER.CSS  v2  —  Style "YouTube" + nouveau menu
+   ---------------------------------------------------------
+   • AUCUNE nouvelle couleur : uniquement les variables de
+     style-user.css (--primary-light, --bg-card, --text-primary…)
+   • Chargé en dernier par includes/menu-user.php
+   • Partie 1 : menu latéral (burger)  → toutes tailles d'écran
+   • Partie 2 : design téléphone (≤ 768px) → bureau inchangé
+========================================================= */
+
+
+/* =========================================================
+   PARTIE 1 — MENU LATÉRAL (burger)
+========================================================= */
+
+/* Fond assombri + flou derrière le menu (au-dessus de la barre du bas et des boutons flottants) */
+.overlay {
+    z-index: 10000 !important;
+    background: rgba(0, 0, 0, .55) !important;
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+    transition: opacity .3s ease, visibility .3s ease !important;
+}
+
+/* Le tiroir : glisse avec "transform" (plus fluide) */
+.sidebar {
+    left: 0 !important;
+    z-index: 10001 !important;
+    width: min(86vw, 330px) !important;
+    transform: translateX(-105%);
+    transition: transform .34s cubic-bezier(.22, .8, .24, 1) !important;
+    border-radius: 0 22px 22px 0;
+    overflow: hidden !important;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 8px 0 40px rgba(0, 0, 0, .35) !important;
+}
+
+.sidebar.active {
+    transform: translateX(0);
+}
+
+/* En-tête : logo + bouton fermer rond */
+.sidebar .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 18px 8px !important;
+    border-bottom: 0 !important;
+    background: transparent !important;
+    flex-shrink: 0;
+}
+
+.sidebar .sidebar-header .logo-side {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -.3px;
+}
+
+.sidebar .sidebar-header .close-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 15px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    transition: transform .25s ease, color .2s ease;
+}
+
+.sidebar .sidebar-header .close-btn:hover,
+.sidebar .sidebar-header .close-btn:active {
+    transform: rotate(90deg);
+    color: var(--primary-light);
+}
+
+/* Carte utilisateur (dégradé de la marque) */
+.sidebar .sidebar-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 14px 6px;
+    padding: 14px;
+    border-radius: 18px;
+    background: var(--primary-gradient);
+    color: #fff;
+    text-decoration: none;
+    box-shadow: 0 8px 22px rgba(59, 130, 246, .28);
+    flex-shrink: 0;
+    transition: transform .2s ease;
+}
+
+.sidebar .sidebar-user:active {
+    transform: scale(.98);
+}
+
+.sidebar .sidebar-user .su-avatar {
+    width: 46px;
+    height: 46px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #fff;
+    color: var(--primary-light);
+    font-size: 20px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar .sidebar-user .su-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.sidebar .sidebar-user .su-text strong {
+    font-size: 16px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sidebar .sidebar-user .su-text small {
+    font-size: 12.5px;
+    opacity: .9;
+    margin-top: 2px;
+}
+
+.sidebar .sidebar-user>i {
+    font-size: 13px;
+    opacity: .85;
+}
+
+/* Corps : zone qui défile */
+.sidebar .sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 12px 18px !important;
+    scrollbar-width: none;
+}
+
+.sidebar .sidebar-body::-webkit-scrollbar {
+    display: none;
+}
+
+/* Titres de sections */
+.sidebar .sidebar-body .section-label {
+    display: block;
+    margin: 14px 10px 6px !important;
+    padding: 0 !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--text-muted) !important;
+}
+
+.sidebar .sidebar-body .section-divider {
+    height: 1px !important;
+    margin: 10px 8px !important;
+    background: var(--border-color) !important;
+    opacity: .7;
+}
+
+/* Lignes du menu */
+.sidebar .sidebar-body a,
+.sidebar .sidebar-body .sidebar-link {
+    display: flex !important;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 9px 10px !important;
+    margin: 2px 0 !important;
+    border-radius: 14px !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: var(--text-primary) !important;
+    background: transparent !important;
+    border: 0 !important;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+    position: relative;
+    transition: background .2s ease, transform .15s ease;
+}
+
+/* Icône dans une pastille arrondie */
+.sidebar .sidebar-body a>i,
+.sidebar .sidebar-body .sidebar-link>i {
+    width: 38px !important;
+    height: 38px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    font-size: 16px !important;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary) !important;
+    transition: background .2s ease, color .2s ease;
+}
+
+.sidebar .sidebar-body a:hover,
+.sidebar .sidebar-body .sidebar-link:hover {
+    background: var(--bg-card) !important;
+}
+
+.sidebar .sidebar-body a:active,
+.sidebar .sidebar-body .sidebar-link:active {
+    transform: scale(.98);
+}
+
+/* Page active : pastille de la couleur de la marque */
+.sidebar .sidebar-body a.active {
+    background: rgba(59, 130, 246, .12) !important;
+    color: var(--primary-light) !important;
+}
+
+.sidebar .sidebar-body a.active>i {
+    background: var(--primary-gradient) !important;
+    border-color: transparent !important;
+    color: #fff !important;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, .35);
+}
+
+.sidebar .sidebar-body a.active::after {
+    content: "";
+    position: absolute;
+    right: 12px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary-light);
+}
+
+/* Badge de langue */
+.sidebar .sidebar-body .lang-badge {
+    margin-left: auto;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    background: rgba(59, 130, 246, .14);
+    color: var(--primary-light);
+}
+
+/* Déconnexion : en rouge doux, bien séparée */
+.sidebar .sidebar-body a.logout {
+    margin-top: 6px !important;
+    color: var(--danger) !important;
+}
+
+.sidebar .sidebar-body a.logout>i {
+    background: rgba(239, 68, 68, .12) !important;
+    border-color: transparent !important;
+    color: var(--danger) !important;
+}
+
+.sidebar .sidebar-body a.logout:hover {
+    background: rgba(239, 68, 68, .08) !important;
+}
+
+/* Apparition en cascade des lignes à l'ouverture */
+@keyframes bmSideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-14px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.sidebar.active .sidebar-user,
+.sidebar.active .sidebar-body>* {
+    animation: bmSideIn .38s cubic-bezier(.22, .8, .24, 1) both;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(1) {
+    animation-delay: .05s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(2) {
+    animation-delay: .08s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(3) {
+    animation-delay: .11s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(4) {
+    animation-delay: .14s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(5) {
+    animation-delay: .17s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(6) {
+    animation-delay: .20s;
+}
+
+.sidebar.active .sidebar-body>*:nth-child(n+7) {
+    animation-delay: .24s;
+}
+
+/* Le bouton burger devient une croix quand le menu est ouvert */
+.nav-burger span {
+    transition: transform .3s ease, opacity .2s ease;
+}
+
+.nav-burger.active span:nth-child(1) {
+    transform: translateY(6px) rotate(45deg);
+}
+
+.nav-burger.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.nav-burger.active span:nth-child(3) {
+    transform: translateY(-6px) rotate(-45deg);
+}
+
+/* Bouton loupe : seulement sur téléphone */
+.nav-search {
+    display: none !important;
+}
+
+/* Barre de catégories : seulement sur téléphone */
+.chips-bar {
+    display: none;
+}
+
+
+/* =========================================================
+   PARTIE 2 — DESIGN TÉLÉPHONE (≤ 768px)
+========================================================= */
+@media (max-width: 768px) {
+
+    html {
+        -webkit-text-size-adjust: 100%;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+        overflow-x: hidden;
+        padding-top: 56px !important;
+        padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+
+    /* 16px minimum : évite le zoom automatique d'iPhone dans les champs */
+    input,
+    select,
+    textarea {
+        font-size: 16px !important;
+    }
+
+    a,
+    button {
+        touch-action: manipulation;
+    }
+
+    /* ---------- BARRE DU HAUT ---------- */
+    .navbar {
+        height: 56px !important;
+        padding: 0 8px 0 14px !important;
+        gap: 6px;
+        background: var(--bg-body) !important;
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+    }
+
+    .navbar .logo {
+        font-size: 18px !important;
+        white-space: nowrap;
+        flex-shrink: 0;
+        gap: 8px;
+        font-weight: 800;
+    }
+
+    .navbar .logo i {
+        font-size: 19px !important;
+    }
+
+    .nav-actions {
+        gap: 2px !important;
+        flex-shrink: 0;
+    }
+
+    /* Assistant + Déconnexion existent déjà (barre du bas / menu) */
+    #chatNavBtn,
+    .nav-logout {
+        display: none !important;
+    }
+
+    /* Boutons ronds sans cadre, comme YouTube */
+    .nav-btn {
+        width: 40px !important;
+        height: 40px !important;
+        min-width: 40px !important;
+        padding: 0 !important;
+        border-radius: 50% !important;
+        justify-content: center;
+        align-items: center;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        color: var(--text-primary) !important;
+        font-size: 17px !important;
+    }
+
+    .nav-btn:active {
+        background: var(--bg-card) !important;
+    }
+
+    .nav-search {
+        display: flex !important;
+        text-decoration: none;
+    }
+
+    .nav-btn#langBtn {
+        width: auto !important;
+        padding: 0 10px !important;
+        border-radius: 20px !important;
+        gap: 5px;
+    }
+
+    .nav-btn#langBtn span {
+        display: inline !important;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .nav-divider {
+        display: none !important;
+    }
+
+    .nav-burger {
+        width: 40px;
+        height: 40px;
+        padding: 0 !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        border-radius: 50% !important;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+    }
+
+    .nav-burger span {
+        width: 19px !important;
+        height: 2px !important;
+        margin: 0 !important;
+    }
+
+    /* ---------- BARRE DU BAS ---------- */
+    .bottom-nav {
+        height: calc(58px + env(safe-area-inset-bottom, 0px)) !important;
+        padding: 0 4px env(safe-area-inset-bottom, 0px) !important;
+    }
+
+    .bottom-nav a {
+        flex: 1;
+        min-width: 0 !important;
+        padding: 6px 2px !important;
+        gap: 3px !important;
+        border-radius: 12px !important;
+    }
+
+    .bottom-nav a i {
+        font-size: 19px !important;
+    }
+
+    .bottom-nav a .nav-label,
+    .bottom-nav a span {
+        font-size: 10px !important;
+        font-weight: 600 !important;
+    }
+
+    .bottom-nav a.active::after {
+        top: 0 !important;
+        width: 22px !important;
+        height: 3px !important;
+    }
+
+    /* ---------- BOUTONS FLOTTANTS ---------- */
+    .bms-fab,
+    .bmc-fab {
+        width: 46px !important;
+        height: 46px !important;
+        right: 12px !important;
+        bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+        font-size: 18px !important;
+    }
+
+    /* ---------- CONTENU DE PAGE ---------- */
+    /* même marge de 14px partout (Favoris et Historique avaient la leur) */
+    .page-content,
+    .historique-container,
+    .favoris-container {
+        padding: 10px 14px 20px !important;
+        max-width: 100% !important;
+        overflow-x: clip;
+    }
+
+    .page-header {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        flex-wrap: wrap;
+        gap: 10px !important;
+        margin: 4px 0 12px !important;
+        text-align: left !important;
+    }
+
+    .page-header h1 {
+        font-size: 19px !important;
+        font-weight: 800 !important;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-start !important;
+        line-height: 1.25;
+    }
+
+    .page-header h1 i {
+        margin-right: 0 !important;
+        font-size: 18px;
+    }
+
+    .page-header h1 span[data-lang-fr] {
+        color: var(--text-primary) !important;
+        font-size: 19px !important;
+        font-weight: 800 !important;
+    }
+
+    .page-header h1 span:last-child {
+        color: var(--text-secondary);
+        font-weight: 500;
+        font-size: 14px !important;
+    }
+
+    .btn-clear-history {
+        width: auto !important;
+        padding: 8px 14px !important;
+        font-size: 13px !important;
+        border-radius: 999px !important;
+        gap: 6px !important;
+        min-height: 36px;
+        box-shadow: none !important;
+    }
+
+    /* ---------- BARRE DE CATÉGORIES (chips) ---------- */
+    .chips-bar {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 8px 14px;
+        margin: 0 -14px 10px;
+        position: sticky;
+        top: 56px;
+        z-index: 40;
+        background: var(--bg-body);
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .chips-bar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .chips-bar .chip {
+        flex: 0 0 auto;
+        height: 34px;
+        padding: 0 15px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        font: 600 13.5px/1 inherit;
+        font-family: inherit;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background .2s ease, color .2s ease, transform .15s ease;
+    }
+
+    .chips-bar .chip:active {
+        transform: scale(.95);
+    }
+
+    .chips-bar .chip.active {
+        background: var(--primary-light);
+        color: #fff;
+    }
+
+    /* ---------- RECHERCHE (accueil) ---------- */
+    .page-header-with-search {
+        gap: 10px !important;
+        margin-bottom: 8px !important;
+    }
+
+    .search-bar {
+        width: 100% !important;
+        min-height: 44px;
+        border-radius: 999px !important;
+    }
+
+    /* ---------- LISTE DE FILMS : STYLE YOUTUBE ---------- */
+    .movies-grid {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        gap: 22px !important;
+        margin: 0 -14px !important;
+    }
+
+    .movies-grid .movie-card {
+        position: relative;
+        display: block;
+        background: transparent !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: visible !important;
+    }
+
+    /* Vignette pleine largeur 16:9 */
+    .movies-grid .movie-card .thumb {
+        position: relative;
+        aspect-ratio: 16 / 9 !important;
+        height: auto !important;
+        padding-top: 0 !important;
+        border-radius: 0 !important;
+        overflow: hidden;
+        background: var(--bg-card);
+    }
+
+    .movies-grid .movie-card .thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .movies-grid .movie-card .thumb .no-image {
+        position: absolute !important;
+        inset: 0;
+        width: 100%;
+        height: 100% !important;
+        gap: 6px !important;
+    }
+
+    .movies-grid .movie-card .thumb .no-image i {
+        font-size: 44px !important;
+    }
+
+    .movies-grid .movie-card .thumb .no-image span {
+        display: none !important;
+    }
+
+    /* Durée en bas à droite, comme YouTube */
+    .movies-grid .movie-card .thumb .duration {
+        bottom: 8px !important;
+        right: 8px !important;
+        padding: 3px 7px !important;
+        font-size: 11.5px !important;
+        font-weight: 700 !important;
+        border-radius: 6px !important;
+        letter-spacing: .2px;
+    }
+
+    .movies-grid .movie-card .thumb .favorite-btn {
+        top: 10px !important;
+        right: 10px !important;
+        width: 36px !important;
+        height: 36px !important;
+        font-size: 15px !important;
+        z-index: 10;
+    }
+
+    .movies-grid .movie-card .thumb .badge-top {
+        top: 10px !important;
+        left: 10px !important;
+        font-size: 11px !important;
+        padding: 4px 10px !important;
+    }
+
+    /* Ligne de texte : pastille ronde + titre + infos */
+    .movies-grid .movie-card .info {
+        display: grid !important;
+        grid-template-columns: 40px minmax(0, 1fr);
+        column-gap: 12px;
+        row-gap: 2px;
+        padding: 12px 14px 0 !important;
+        text-align: left !important;
+    }
+
+    .movies-grid .movie-card .info::before {
+        content: "\f008";
+        font-family: "Font Awesome 6 Free";
+        font-weight: 900;
+        grid-row: 1 / span 2;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        background: var(--bg-card);
+        color: var(--primary-light);
+        border: 1px solid var(--border-color);
+    }
+
+    .movies-grid .movie-card .info h4 {
+        grid-column: 2;
+        font-size: 15.5px !important;
+        font-weight: 600 !important;
+        line-height: 1.32 !important;
+        margin: 0 !important;
+        white-space: normal !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 2 !important;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-align: left !important;
+        color: var(--text-primary) !important;
+    }
+
+    .movies-grid .movie-card .info .meta {
+        grid-column: 2;
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: wrap !important;
+        justify-content: flex-start !important;
+        align-items: center;
+        gap: 2px 0 !important;
+        margin: 0 !important;
+        font-size: 12.5px !important;
+        color: var(--text-secondary) !important;
+    }
+
+    .movies-grid .movie-card .info .meta span {
+        gap: 4px !important;
+    }
+
+    /* petit point séparateur entre les infos */
+    .movies-grid .movie-card .info .meta span+span::before {
+        content: "•";
+        margin: 0 7px;
+        font-size: 9px;
+        opacity: .7;
+    }
+
+    .movies-grid .movie-card .info .meta i {
+        font-size: 11px;
+    }
+
+    /* Le bouton "Regarder" devient invisible : toute la carte est cliquable */
+    .movies-grid .movie-card .info .btn-play {
+        position: static !important;
+        display: block !important;
+        width: 0 !important;
+        height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: 0 !important;
+        overflow: hidden;
+        font-size: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+    }
+
+    .movies-grid .movie-card .info .btn-play::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+    }
+
+    .movies-grid .movie-card:hover {
+        transform: none !important;
+    }
+
+    /* Bouton "Voir les vidéos" des pages vides : on le garde normal */
+    .empty-state .btn-play {
+        display: inline-flex !important;
+        padding: 0 22px !important;
+        min-height: 44px;
+        border-radius: 999px !important;
+    }
+
+    /* ---------- PAGE VIDÉOS : recherche + tri compacts ---------- */
+    .filter-section {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) 46px !important;
+        gap: 8px !important;
+        padding: 0 !important;
+        margin-bottom: 10px !important;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+    }
+
+    /* la catégorie est remplacée par la barre de chips */
+    .filter-section .custom-select-wrapper {
+        display: none !important;
+    }
+
+    .filter-section #searchInput {
+        grid-column: 1;
+        grid-row: 1;
+        width: 100% !important;
+        min-width: 0 !important;
+        height: 44px !important;
+        padding: 0 16px !important;
+        border-radius: 999px !important;
+        margin: 0 !important;
+    }
+
+    .filter-section .btn-search {
+        grid-column: 2;
+        grid-row: 1;
+        width: 46px !important;
+        height: 44px !important;
+        padding: 0 !important;
+        border-radius: 999px !important;
+        margin: 0 !important;
+        justify-content: center;
+    }
+
+    .filter-section .btn-search span {
+        display: none !important;
+    }
+
+    .filter-section #sortSelect {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: auto !important;
+        justify-self: start;
+        height: 36px !important;
+        padding: 0 36px 0 14px !important;
+        font-size: 14px !important;
+        border-radius: 999px !important;
+        margin: 0 !important;
+    }
+
+    /* les statistiques prennent de la place pour rien sur téléphone */
+    .stats-row:has(> .stat-item) {
+        display: none !important;
+    }
+
+    /* ---------- PAGE LECTURE : STYLE YOUTUBE ---------- */
+    .watch-container {
+        padding: 0 0 calc(90px + env(safe-area-inset-bottom, 0px)) !important;
+        max-width: none !important;
+    }
+
+    /* "Retour" : inutile (barre du bas), on libère la place */
+    .watch-container>.btn-back {
+        display: none !important;
+    }
+
+    /* Lecteur collé en haut pendant qu'on lit les commentaires */
+    .watch-player {
+        position: sticky;
+        top: 56px;
+        z-index: 30;
+        margin: 0 !important;
+        border-radius: 0 !important;
+        overflow: hidden;
+        background: #000;
+    }
+
+    .watch-player video {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: contain;
+        background: #000;
+        border-radius: 0 !important;
+    }
+
+    /* Titre + infos : à plat, sans cadre */
+    .watch-card {
+        padding: 14px 14px 6px !important;
+        margin: 0 !important;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+    }
+
+    .watch-card .watch-title {
+        font-size: 19px !important;
+        font-weight: 700 !important;
+        line-height: 1.3;
+        margin: 0 0 8px !important;
+    }
+
+    .watch-info-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 12px !important;
+        font-size: 13px !important;
+        color: var(--text-secondary);
+        margin-bottom: 12px !important;
+        border: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Actions : pastilles qui défilent horizontalement */
+    .watch-actions {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        align-items: center;
+        gap: 8px !important;
+        overflow-x: auto;
+        padding: 2px 0 8px !important;
+        margin: 0 -14px !important;
+        padding-left: 14px !important;
+        padding-right: 14px !important;
+        scrollbar-width: none;
+        border: 0 !important;
+    }
+
+    .watch-actions::-webkit-scrollbar {
+        display: none;
+    }
+
+    .watch-actions>*,
+    .watch-actions form {
+        flex: 0 0 auto;
+    }
+
+    .watch-actions button,
+    .watch-actions .share-btn-main {
+        min-height: 38px;
+        border-radius: 999px !important;
+        white-space: nowrap;
+    }
+
+    /* Commentaires : à plat */
+    .watch-feedback {
+        padding: 14px !important;
+        margin: 8px 0 0 !important;
+        background: transparent !important;
+        border: 0 !important;
+        border-top: 8px solid var(--bg-card) !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    .watch-fb-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px !important;
+    }
+
+    .watch-fb-form textarea {
+        min-height: 72px;
+        border-radius: 14px !important;
+    }
+
+    .watch-fb-item {
+        padding: 12px !important;
+        border-radius: 14px !important;
+    }
+
+    /* Vidéos suggérées : lignes "vignette à gauche, texte à droite" */
+    .watch-suggestions {
+        padding: 14px !important;
+        border-top: 8px solid var(--bg-card);
+        margin-top: 14px;
+    }
+
+    .suggested-grid {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 14px !important;
+    }
+
+    .suggested-grid .movie-card {
+        display: grid !important;
+        grid-template-columns: 158px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        background: transparent !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        text-decoration: none;
+    }
+
+    .suggested-grid .movie-card .thumb {
+        aspect-ratio: 16 / 9;
+        height: auto !important;
+        padding-top: 0 !important;
+        border-radius: 10px !important;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .suggested-grid .movie-card .thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .suggested-grid .movie-card .info {
+        padding: 0 !important;
+    }
+
+    .suggested-grid .movie-card .info h4 {
+        font-size: 14px !important;
+        line-height: 1.3;
+        margin: 0 0 4px !important;
+        white-space: normal !important;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .suggested-grid .movie-card .info .meta {
+        font-size: 12px !important;
+        color: var(--text-secondary);
+    }
+
+    /* ---------- PROFIL / FORMULAIRES ---------- */
+    .profile-container {
+        padding: 8px 12px calc(90px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+
+    .profile-container .profile-card {
+        border-radius: 22px !important;
+    }
+
+    .form-group input,
+    .form-group select {
+        min-height: 46px;
+        border-radius: 14px !important;
+    }
+
+    .btn,
+    button[type="submit"] {
+        min-height: 46px;
+    }
+}
+
+/* ---------- Très petits écrans (≤ 360px) ---------- */
+@media (max-width: 360px) {
+    .navbar .logo {
+        font-size: 16px !important;
+    }
+
+    .suggested-grid .movie-card {
+        grid-template-columns: 136px minmax(0, 1fr);
+    }
+
+    .movies-grid .movie-card .info h4 {
+        font-size: 14.5px !important;
+    }
+}
+
+/* ---------- Appareils tactiles : pas de survol collant ---------- */
+@media (hover: none) {
+
+    .movie-card:hover,
+    .btn-play:hover,
+    .nav-btn:hover {
+        transform: none !important;
+    }
+
+    .movie-card:hover .thumb img {
+        transform: none !important;
+    }
+}
+
+/* ---------- Respect de "réduire les animations" ---------- */
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    .sidebar.active .sidebar-user,
+    .sidebar.active .sidebar-body>* {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+    }
+}

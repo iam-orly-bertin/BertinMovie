@@ -1,0 +1,1660 @@
+<?php
+// Même démarrage de session que login.php : l'admin est connecté avec le cookie BM_ADMIN.
+// Si on fait un simple session_start(), PHP ouvre une autre session (PHPSESSID) => "pas connecté" => retour à l'index.
+if (file_exists(__DIR__ . '/../includes/session_boot.php')) {
+    if (!defined('BM_SESSION_NAME')) {
+        define('BM_SESSION_NAME', 'BM_ADMIN');
+    }
+    require_once __DIR__ . '/../includes/session_boot.php';
+} elseif (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+require_once __DIR__ . '/../connexion.php';
+require_once __DIR__ . '/../includes/auth_check.php';
+require_once __DIR__ . '/../includes/update_session.php';
+
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header("Location: ../index.php");
+    exit();
+}
+if (isset($_SESSION['user_id'])) {
+    updateUserSession($pdo, $_SESSION['user_id']);
+}
+
+/* =========================================================
+   OUTILS
+   Ce fichier travaille UNIQUEMENT sur : film, acteur,
+   realisateur (+ categorie, langue, film_acteur).
+   Aucune table vidéo n'est utilisée.
+========================================================= */
+define('NF', "(f.is_deleted = 0 OR f.is_deleted IS NULL)"); // films non supprimés
+$erreurs = [];
+
+function e($s): string
+{
+    return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+}
+
+// Exécute une requête préparée ; en cas d'erreur SQL, on garde le message pour l'afficher à l'admin
+function q(PDO $pdo, string $sql, array $params = []): array
+{
+    global $erreurs;
+    try {
+        $s = $pdo->prepare($sql);
+        $s->execute($params);
+        return $s->fetchAll();
+    } catch (PDOException $ex) {
+        $erreurs[] = $ex->getMessage();
+        error_log('Rapport erreur : ' . $ex->getMessage());
+        return [];
+    }
+}
+
+// Statistiques d'un ensemble de films défini par une condition WHERE (alias f)
+function statsFilms(PDO $pdo, string $where, array $p): array
+{
+    $r = q($pdo, "SELECT COUNT(*) AS nb_films,
+                         ROUND(AVG(f.duree), 1) AS duree_moy,
+                         COALESCE(SUM(f.duree), 0) AS duree_tot,
+                         COUNT(DISTINCT f.id_realisateur) AS nb_real,
+                         COUNT(DISTINCT f.id_categorie) AS nb_cat,
+                         COUNT(DISTINCT f.id_langue) AS nb_langues
+                  FROM film f WHERE " . NF . " AND $where", $p);
+    $s = $r[0] ?? [];
+    $a = q($pdo, "SELECT COUNT(DISTINCT fa.id_acteur) AS n
+                  FROM film_acteur fa JOIN film f ON f.id_film = fa.id_film
+                  WHERE " . NF . " AND $where", $p);
+    $s['nb_acteurs'] = $a[0]['n'] ?? 0;
+    return $s;
+}
+
+// Régression linéaire y = a*x + b  (+ R²)
+function regression(array $x, array $y): array
+{
+    $n = count($x);
+    if ($n < 2)
+        return ['a' => 0, 'b' => $y[0] ?? 0, 'r2' => 0];
+    $mx = array_sum($x) / $n;
+    $my = array_sum($y) / $n;
+    $sxy = $sxx = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sxy += ($x[$i] - $mx) * ($y[$i] - $my);
+        $sxx += ($x[$i] - $mx) ** 2;
+    }
+    $a = $sxx == 0 ? 0 : $sxy / $sxx;
+    $b = $my - $a * $mx;
+    $ssT = $ssR = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $ssT += ($y[$i] - $my) ** 2;
+        $ssR += ($y[$i] - ($a * $x[$i] + $b)) ** 2;
+    }
+    return ['a' => $a, 'b' => $b, 'r2' => $ssT == 0 ? 0 : 1 - $ssR / $ssT];
+}
+
+function variation($a, $b): string
+{
+    $a = (float) $a;
+    $b = (float) $b;
+    if ($a == 0)
+        return $b == 0 ? '0 %' : 'nouveau';
+    $v = round((($b - $a) / $a) * 100, 1);
+    return ($v > 0 ? '+' : '') . $v . ' %';
+}
+
+// Construit une URL en gardant les paramètres actuels (affichage uniquement)
+function qs(array $over): string
+{
+    return '?' . http_build_query(array_merge($_GET, $over));
+}
+
+/* =========================================================
+   DONNÉES DE BASE
+========================================================= */
+$type = $_GET['type'] ?? 'periodique';
+if (!in_array($type, ['periodique', 'personnalise', 'comparatif', 'prevision'], true))
+    $type = 'periodique';
+
+$bornes = q($pdo, "SELECT MIN(YEAR(f.date_sortie)) AS mn, MAX(YEAR(f.date_sortie)) AS mx
+                   FROM film f WHERE " . NF . " AND f.date_sortie IS NOT NULL")[0] ?? [];
+$anMax = (int) ($bornes['mx'] ?? 0);
+$anMin = (int) ($bornes['mn'] ?? 0);
+if ($anMax === 0) {
+    $anMin = $anMax = (int) date('Y');
+}
+
+$categories = q($pdo, "SELECT id_categorie, nom_categorie FROM categorie ORDER BY nom_categorie");
+$langues = q($pdo, "SELECT id_langue, nom_langue FROM langue ORDER BY nom_langue");
+
+$table = ['head' => [], 'rows' => []];   // tableau générique (affichage + CSV)
+$chart = ['type' => 'bar', 'labels' => [], 'datasets' => [], 'horizontal' => false];
+
+/* =========================================================
+   1. RAPPORTS PÉRIODIQUES  (sur la date de sortie des films)
+========================================================= */
+if ($type === 'periodique') {
+    $freq = ($_GET['freq'] ?? 'annuel') === 'mensuel' ? 'mensuel' : 'annuel';
+    $annee = (int) ($_GET['annee'] ?? $anMax);
+    if ($annee < 1850 || $annee > 2200)
+        $annee = $anMax;
+
+    if ($freq === 'annuel') {
+        $d = max($anMin, $anMax - 19);
+        $labels = array_map('strval', range($d, $anMax));
+        $fmt = '%Y';
+        $w = "YEAR(f.date_sortie) BETWEEN ? AND ?";
+        $p = [$d, $anMax];
+    } else {
+        $labels = [];
+        for ($m = 1; $m <= 12; $m++)
+            $labels[] = sprintf('%d-%02d', $annee, $m);
+        $fmt = '%Y-%m';
+        $w = "YEAR(f.date_sortie) = ?";
+        $p = [$annee];
+    }
+
+    $rows = q($pdo, "SELECT DATE_FORMAT(f.date_sortie, '$fmt') AS per, COUNT(*) AS nb,
+                            ROUND(AVG(f.duree), 1) AS dm, COUNT(DISTINCT f.id_realisateur) AS nr,
+                            COUNT(DISTINCT f.id_categorie) AS nc, COUNT(DISTINCT f.id_langue) AS nl
+                     FROM film f WHERE " . NF . " AND f.date_sortie IS NOT NULL AND $w
+                     GROUP BY per", $p);
+    $act = q($pdo, "SELECT DATE_FORMAT(f.date_sortie, '$fmt') AS per, COUNT(DISTINCT fa.id_acteur) AS na
+                    FROM film_acteur fa JOIN film f ON f.id_film = fa.id_film
+                    WHERE " . NF . " AND f.date_sortie IS NOT NULL AND $w
+                    GROUP BY per", $p);
+    $R = [];
+    foreach ($rows as $r)
+        $R[$r['per']] = $r;
+    $A = [];
+    foreach ($act as $r)
+        $A[$r['per']] = $r['na'];
+
+    $table['head'] = ['Période', 'Films sortis', 'Durée moyenne (min)', 'Réalisateurs', 'Acteurs', 'Catégories', 'Langues'];
+    $vals = [];
+    foreach ($labels as $lab) {
+        $r = $R[$lab] ?? null;
+        $table['rows'][] = [$lab, $r['nb'] ?? 0, $r['dm'] ?? '-', $r['nr'] ?? 0, $A[$lab] ?? 0, $r['nc'] ?? 0, $r['nl'] ?? 0];
+        $vals[] = (int) ($r['nb'] ?? 0);
+    }
+    $chart['labels'] = $labels;
+    $chart['datasets'] = [['label' => 'Films sortis', 'data' => $vals]];
+
+    // Instantané global
+    $snap = [
+        'films' => q($pdo, "SELECT COUNT(*) AS n FROM film f WHERE " . NF)[0]['n'] ?? 0,
+        'acteurs' => q($pdo, "SELECT COUNT(*) AS n FROM acteur")[0]['n'] ?? 0,
+        'real' => q($pdo, "SELECT COUNT(*) AS n FROM realisateur")[0]['n'] ?? 0,
+        'sans_date' => q($pdo, "SELECT COUNT(*) AS n FROM film f WHERE " . NF . " AND f.date_sortie IS NULL")[0]['n'] ?? 0,
+    ];
+}
+
+/* =========================================================
+   2. RAPPORTS PERSONNALISÉS
+========================================================= */
+if ($type === 'personnalise') {
+    $groupes = [
+        'films' => ['categorie' => 'Par catégorie', 'langue' => 'Par langue', 'realisateur' => 'Par réalisateur', 'annee' => 'Par année de sortie'],
+        'acteurs' => ['sexe' => 'Par sexe', 'top' => 'Top acteurs (nombre de films)'],
+        'realisateurs' => ['nationalite' => 'Par nationalité', 'top' => 'Top réalisateurs (nombre de films)'],
+    ];
+    $entite = in_array($_GET['entite'] ?? '', array_keys($groupes), true) ? $_GET['entite'] : 'films';
+    $groupe = isset($groupes[$entite][$_GET['groupe'] ?? '']) ? $_GET['groupe'] : array_key_first($groupes[$entite]);
+
+    $cd = ($_GET['c_debut'] ?? '') !== '' ? (int) $_GET['c_debut'] : null;
+    $cf = ($_GET['c_fin'] ?? '') !== '' ? (int) $_GET['c_fin'] : null;
+    $cc = (int) ($_GET['cat'] ?? 0);
+    $cl = (int) ($_GET['lang'] ?? 0);
+
+    $res = [];
+    if ($entite === 'films') {
+        $w = [NF];
+        $p = [];
+        if ($cd !== null) {
+            $w[] = "YEAR(f.date_sortie) >= ?";
+            $p[] = $cd;
+        }
+        if ($cf !== null) {
+            $w[] = "YEAR(f.date_sortie) <= ?";
+            $p[] = $cf;
+        }
+        if ($cc > 0) {
+            $w[] = "f.id_categorie = ?";
+            $p[] = $cc;
+        }
+        if ($cl > 0) {
+            $w[] = "f.id_langue = ?";
+            $p[] = $cl;
+        }
+        $expr = [
+            'categorie' => "COALESCE(c.nom_categorie, 'Non défini')",
+            'langue' => "COALESCE(l.nom_langue, 'Non défini')",
+            'realisateur' => "COALESCE(CONCAT(r.prenom, ' ', r.nom), 'Non défini')",
+            'annee' => "COALESCE(CAST(YEAR(f.date_sortie) AS CHAR), 'Inconnue')",
+        ][$groupe];
+        $res = q($pdo, "SELECT $expr AS libelle, COUNT(*) AS nb, ROUND(AVG(f.duree), 1) AS dm
+                        FROM film f
+                        LEFT JOIN categorie c ON c.id_categorie = f.id_categorie
+                        LEFT JOIN langue l ON l.id_langue = f.id_langue
+                        LEFT JOIN realisateur r ON r.id_realisateur = f.id_realisateur
+                        WHERE " . implode(' AND ', $w) . "
+                        GROUP BY libelle
+                        ORDER BY " . ($groupe === 'annee' ? 'libelle ASC' : 'nb DESC') . " LIMIT 50", $p);
+        $table['head'] = ['Libellé', 'Nombre de films', 'Durée moyenne (min)', 'Part (%)'];
+    } elseif ($entite === 'acteurs') {
+        if ($groupe === 'sexe') {
+            $res = q($pdo, "SELECT COALESCE(NULLIF(a.sexe, ''), 'Non défini') AS libelle, COUNT(*) AS nb
+                            FROM acteur a GROUP BY libelle ORDER BY nb DESC");
+            $table['head'] = ['Libellé', 'Nombre d\'acteurs', 'Part (%)'];
+        } else {
+            $res = q($pdo, "SELECT CONCAT(a.prenom, ' ', a.nom) AS libelle, COUNT(f.id_film) AS nb
+                            FROM acteur a
+                            LEFT JOIN film_acteur fa ON fa.id_acteur = a.id_acteur
+                            LEFT JOIN film f ON f.id_film = fa.id_film AND " . NF . "
+                            GROUP BY a.id_acteur, libelle ORDER BY nb DESC, libelle LIMIT 20");
+            $table['head'] = ['Acteur', 'Nombre de films', 'Part (%)'];
+        }
+    } else { // realisateurs
+        if ($groupe === 'nationalite') {
+            $res = q($pdo, "SELECT COALESCE(NULLIF(r.nationalite, ''), 'Non définie') AS libelle, COUNT(*) AS nb
+                            FROM realisateur r GROUP BY libelle ORDER BY nb DESC LIMIT 50");
+            $table['head'] = ['Nationalité', 'Nombre de réalisateurs', 'Part (%)'];
+        } else {
+            $res = q($pdo, "SELECT CONCAT(r.prenom, ' ', r.nom) AS libelle, COUNT(f.id_film) AS nb
+                            FROM realisateur r
+                            LEFT JOIN film f ON f.id_realisateur = r.id_realisateur AND " . NF . "
+                            GROUP BY r.id_realisateur, libelle ORDER BY nb DESC, libelle LIMIT 20");
+            $table['head'] = ['Réalisateur', 'Nombre de films', 'Part (%)'];
+        }
+    }
+
+    $total = array_sum(array_column($res, 'nb'));
+    $vals = [];
+    foreach ($res as $r) {
+        $part = $total > 0 ? round($r['nb'] * 100 / $total, 1) : 0;
+        $table['rows'][] = $entite === 'films'
+            ? [$r['libelle'], $r['nb'], $r['dm'] ?? '-', $part]
+            : [$r['libelle'], $r['nb'], $part];
+        $vals[] = (int) $r['nb'];
+    }
+    $chart['labels'] = array_column($res, 'libelle');
+    $chart['datasets'] = [['label' => 'Nombre', 'data' => $vals]];
+    $chart['horizontal'] = count($res) > 8;
+}
+
+/* =========================================================
+   3. ANALYSE COMPARATIVE
+========================================================= */
+$METS = [
+    'nb_films' => 'Films',
+    'duree_moy' => 'Durée moyenne (min)',
+    'duree_tot' => 'Durée totale (min)',
+    'nb_real' => 'Réalisateurs',
+    'nb_acteurs' => 'Acteurs',
+    'nb_cat' => 'Catégories',
+    'nb_langues' => 'Langues',
+];
+if ($type === 'comparatif') {
+    $mode = in_array($_GET['mode'] ?? '', ['periodes', 'realisateurs', 'acteurs'], true) ? $_GET['mode'] : 'periodes';
+    $listeReal = q($pdo, "SELECT id_realisateur AS id, CONCAT(prenom, ' ', nom) AS nom FROM realisateur ORDER BY nom, prenom");
+    $listeAct = q($pdo, "SELECT id_acteur AS id, CONCAT(prenom, ' ', nom) AS nom FROM acteur ORDER BY nom, prenom");
+
+    $a1 = (int) ($_GET['a1'] ?? max($anMin, $anMax - 1));
+    $a2 = (int) ($_GET['a2'] ?? max($anMin, $anMax - 1));
+    $b1 = (int) ($_GET['b1'] ?? $anMax);
+    $b2 = (int) ($_GET['b2'] ?? $anMax);
+    if ($a1 > $a2)
+        [$a1, $a2] = [$a2, $a1];
+    if ($b1 > $b2)
+        [$b1, $b2] = [$b2, $b1];
+
+    $liste = $mode === 'realisateurs' ? $listeReal : $listeAct;
+    $idA = (int) ($_GET['id_a'] ?? ($liste[0]['id'] ?? 0));
+    $idB = (int) ($_GET['id_b'] ?? ($liste[1]['id'] ?? ($liste[0]['id'] ?? 0)));
+    $nomDe = function (array $l, int $id) {
+        foreach ($l as $x)
+            if ((int) $x['id'] === $id)
+                return $x['nom'];
+        return '#' . $id;
+    };
+
+    if ($mode === 'periodes') {
+        $defs = [
+            ['label' => $a1 === $a2 ? "$a1" : "$a1–$a2", 'where' => "YEAR(f.date_sortie) BETWEEN ? AND ?", 'p' => [$a1, $a2]],
+            ['label' => $b1 === $b2 ? "$b1" : "$b1–$b2", 'where' => "YEAR(f.date_sortie) BETWEEN ? AND ?", 'p' => [$b1, $b2]],
+        ];
+    } elseif ($mode === 'realisateurs') {
+        $defs = [
+            ['label' => $nomDe($listeReal, $idA), 'where' => "f.id_realisateur = ?", 'p' => [$idA]],
+            ['label' => $nomDe($listeReal, $idB), 'where' => "f.id_realisateur = ?", 'p' => [$idB]],
+        ];
+    } else {
+        $defs = [
+            ['label' => $nomDe($listeAct, $idA), 'where' => "f.id_film IN (SELECT id_film FROM film_acteur WHERE id_acteur = ?)", 'p' => [$idA]],
+            ['label' => $nomDe($listeAct, $idB), 'where' => "f.id_film IN (SELECT id_film FROM film_acteur WHERE id_acteur = ?)", 'p' => [$idB]],
+        ];
+    }
+
+    $cmp = [];
+    foreach ($defs as $i => $df) {
+        $cmp[$i] = [
+            'label' => $df['label'],
+            'stats' => statsFilms($pdo, $df['where'], $df['p']),
+            'cats' => q($pdo, "SELECT COALESCE(c.nom_categorie, 'Non défini') AS libelle, COUNT(*) AS nb
+                                FROM film f LEFT JOIN categorie c ON c.id_categorie = f.id_categorie
+                                WHERE " . NF . " AND " . $df['where'] . "
+                                GROUP BY libelle ORDER BY nb DESC LIMIT 5", $df['p']),
+        ];
+    }
+    $chartKeys = ['nb_films', 'nb_real', 'nb_acteurs', 'nb_cat', 'nb_langues'];
+    $chart['labels'] = array_map(fn($k) => $METS[$k], $chartKeys);
+    foreach ($cmp as $c) {
+        $chart['datasets'][] = ['label' => $c['label'], 'data' => array_map(fn($k) => (float) ($c['stats'][$k] ?? 0), $chartKeys)];
+    }
+}
+
+/* =========================================================
+   4. PRÉVISIONS (nombre de films par année de sortie, etc.)
+========================================================= */
+if ($type === 'prevision') {
+    $PM = ['nb_films' => 'Nombre de films sortis', 'duree_moy' => 'Durée moyenne des films (min)', 'nb_real' => 'Réalisateurs actifs'];
+    $met = isset($PM[$_GET['met'] ?? '']) ? $_GET['met'] : 'nb_films';
+    $h = max(1, min(5, (int) ($_GET['nb'] ?? 3)));
+    $d = max($anMin, $anMax - 14);
+
+    $rows = q($pdo, "SELECT YEAR(f.date_sortie) AS an, COUNT(*) AS nb_films, ROUND(AVG(f.duree), 1) AS duree_moy,
+                            COUNT(DISTINCT f.id_realisateur) AS nb_real
+                     FROM film f WHERE " . NF . " AND f.date_sortie IS NOT NULL AND YEAR(f.date_sortie) BETWEEN ? AND ?
+                     GROUP BY an ORDER BY an", [$d, $anMax]);
+    $par = [];
+    foreach ($rows as $r)
+        $par[(int) $r['an']] = (float) $r[$met];
+
+    $xs = $ys = [];
+    for ($y = $d; $y <= $anMax; $y++) {
+        if (isset($par[$y])) {
+            $xs[] = $y;
+            $ys[] = $par[$y];
+        } elseif ($met !== 'duree_moy') {
+            $xs[] = $y;
+            $ys[] = 0;
+        }   // année sans film = 0
+    }
+    $ok = count($xs) >= 3;
+    $prev = [];
+    $tendance = [];
+    $reg = ['a' => 0, 'b' => 0, 'r2' => 0];
+    if ($ok) {
+        $reg = regression($xs, $ys);
+        for ($i = 1; $i <= $h; $i++) {
+            $y = $anMax + $i;
+            $prev[$y] = max(0, round($reg['a'] * $y + $reg['b'], $met === 'duree_moy' ? 1 : 0));
+        }
+        $tendance = array_map(fn($x) => round(max(0, $reg['a'] * $x + $reg['b']), 1), $xs);
+    }
+}
+
+/* =========================================================
+   EXPORT CSV (périodique + personnalisé)
+========================================================= */
+if (isset($_GET['export']) && $_GET['export'] === 'csv' && in_array($type, ['periodique', 'personnalise'], true)) {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="rapport_' . $type . '_' . date('Y-m-d') . '.csv"');
+    $out = fopen('php://output', 'w');
+    fprintf($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
+    fputcsv($out, $table['head']);
+    foreach ($table['rows'] as $row)
+        fputcsv($out, $row);
+    fclose($out);
+    exit();
+}
+
+
+/* =========================================================
+   EXPORT EXCEL (.xlsx) + PDF : les 4 types de rapports
+   À coller juste APRÈS le bloc « EXPORT CSV » (celui qui finit par exit(); })
+   et AVANT « // ---------- Configuration du graphique »
+========================================================= */
+if (isset($_GET['export']) && in_array($_GET['export'], ['xlsx', 'pdf'], true)) {
+    require_once __DIR__ . '/../includes/export_lib.php';
+
+    $sousTitre = [];
+    $sections = [];
+
+    if ($type === 'periodique') {
+        $sousTitre[] = ($freq === 'annuel')
+            ? 'Annuel : ' . reset($labels) . ' à ' . end($labels)
+            : 'Mensuel : année ' . $annee;
+        $totFilms = 0;
+        foreach ($table['rows'] as $r) {
+            $totFilms += (int) $r[1];
+        }
+        $sections[] = [
+            'name' => 'Périodique',
+            'heading' => 'Films sortis par période',
+            'head' => $table['head'],
+            'rows' => $table['rows'],
+            'total' => ['TOTAL', $totFilms, '', '', '', '', ''],
+        ];
+
+    } elseif ($type === 'personnalise') {
+        $sousTitre[] = ucfirst($entite) . ' : ' . $groupes[$entite][$groupe];
+        if ($entite === 'films') {
+            if ($cd !== null || $cf !== null) {
+                $sousTitre[] = 'Années : ' . ($cd ?? '…') . ' – ' . ($cf ?? '…');
+            }
+            foreach ($categories as $c) {
+                if ((int) $c['id_categorie'] === $cc) {
+                    $sousTitre[] = 'Catégorie : ' . $c['nom_categorie'];
+                }
+            }
+            foreach ($langues as $l) {
+                if ((int) $l['id_langue'] === $cl) {
+                    $sousTitre[] = 'Langue : ' . $l['nom_langue'];
+                }
+            }
+        }
+        $part = $total > 0 ? 100 : 0;
+        $sections[] = [
+            'name' => 'Personnalisé',
+            'heading' => $groupes[$entite][$groupe],
+            'head' => $table['head'],
+            'rows' => $table['rows'],
+            'total' => ($entite === 'films') ? ['TOTAL', $total, '', $part] : ['TOTAL', $total, $part],
+        ];
+
+    } elseif ($type === 'comparatif') {
+        $libModes = ['periodes' => 'Comparaison de périodes', 'realisateurs' => 'Comparaison de réalisateurs', 'acteurs' => "Comparaison d'acteurs"];
+        $sousTitre[] = $libModes[$mode] . ' : ' . $cmp[0]['label'] . '  contre  ' . $cmp[1]['label'];
+        $rowsCmp = [];
+        foreach ($METS as $k => $lib) {
+            $va = (float) ($cmp[0]['stats'][$k] ?? 0);
+            $vb = (float) ($cmp[1]['stats'][$k] ?? 0);
+            $rowsCmp[] = [$lib, $va, $vb, round($vb - $va, 1), variation($va, $vb)];
+        }
+        $sections[] = [
+            'name' => 'Comparaison',
+            'heading' => 'Indicateurs comparés',
+            'head' => ['Indicateur', $cmp[0]['label'], $cmp[1]['label'], 'Écart', 'Variation'],
+            'rows' => $rowsCmp,
+        ];
+        foreach ($cmp as $i => $c) {
+            $L = ($i === 0) ? 'A' : 'B';
+            $rowsCat = [];
+            foreach ($c['cats'] as $t) {
+                $rowsCat[] = [$t['libelle'], (int) $t['nb']];
+            }
+            $sections[] = [
+                'name' => 'Catégories ' . $L,
+                'heading' => 'Top catégories ' . $L . ' : ' . $c['label'],
+                'head' => ['Catégorie', 'Nombre de films'],
+                'rows' => $rowsCat,
+            ];
+        }
+
+    } else { // prevision
+        $sousTitre[] = $PM[$met] . ' : horizon ' . $h . ' an(s)';
+        $rowsPrev = [];
+        if (!empty($ok)) {
+            foreach ($xs as $i => $an) {
+                $rowsPrev[] = [$an, 'Réel', $ys[$i], $tendance[$i] ?? ''];
+            }
+            foreach ($prev as $an => $v) {
+                $rowsPrev[] = [$an, 'Prévision', $v, $v];
+            }
+        }
+        $sections[] = [
+            'name' => 'Prévisions',
+            'heading' => 'Réel et prévisions',
+            'head' => ['Année', 'Type', 'Valeur', 'Tendance'],
+            'rows' => $rowsPrev,
+            'note' => !empty($ok)
+                ? sprintf("Méthode : régression linéaire sur %d années (pente %s par an, R² = %s). Une prévision n'est qu'une estimation basée sur le passé.",
+                    count($xs), number_format($reg['a'], 2, ',', ' '), number_format($reg['r2'], 2, ',', ' '))
+                : 'Pas assez de données : il faut des films répartis sur au moins 3 années différentes.',
+        ];
+    }
+
+    $rapport = [
+        'title' => $titres[$type][1],
+        'subtitle' => implode('   |   ', array_filter($sousTitre)),
+        'sections' => $sections,
+    ];
+    $nomFichier = 'rapport_' . $type . '_' . date('Y-m-d');
+
+    // Journal des activités (facultatif : ignoré si la fonction n'existe pas)
+    try {
+        $np = __DIR__ . '/../includes/notification.php';
+        if (is_file($np)) {
+            require_once $np;
+        }
+        if (function_exists('addHistoriqueAction') && isset($_SESSION['user_id'])) {
+            addHistoriqueAction($pdo, $_SESSION['user_id'], 'export', 'rapport', null, $nomFichier,
+                'Export ' . strtoupper($_GET['export']) . ' : ' . $titres[$type][1]);
+        }
+    } catch (Throwable $ex) {
+        // le journal ne doit jamais empêcher l'export
+    }
+
+    try {
+        if ($_GET['export'] === 'xlsx') {
+            bm_xlsx_output($nomFichier . '.xlsx', $rapport);
+        } else {
+            bm_pdf_output($nomFichier . '.pdf', $rapport);
+        }
+    } catch (Throwable $ex) {
+        $erreurs[] = 'Export impossible : ' . $ex->getMessage();   // affiché dans le bandeau d'erreur existant
+    }
+}
+
+
+// ---------- Configuration du graphique (envoyée au JavaScript) ----------
+$jsCfg = null;
+if ($type === 'prevision') {
+    if (!empty($ok)) {
+        $jsCfg = [
+            'kind' => 'forecast',
+            'labels' => array_map('strval', array_merge($xs, array_keys($prev))),
+            'reel' => array_map('floatval', $ys),
+            'prev' => array_values($prev),
+            'tendance' => $tendance,
+            'height' => 340,
+        ];
+    }
+} elseif ($chart['datasets']) {
+    $jsCfg = [
+        'kind' => 'bar',
+        'labels' => array_map('strval', $chart['labels']),
+        'datasets' => $chart['datasets'],
+        'horizontal' => $chart['horizontal'],
+        'height' => $chart['horizontal'] ? max(340, count($chart['labels']) * 30 + 60) : 340,
+    ];
+}
+
+$titres = [
+    'periodique' => ['fa-calendar-alt', 'Rapports périodiques'],
+    'personnalise' => ['fa-sliders-h', 'Rapports personnalisés'],
+    'comparatif' => ['fa-balance-scale', 'Analyse comparative'],
+    'prevision' => ['fa-chart-line', 'Prévisions statistiques'],
+];
+
+// Index de la colonne "Part (%)" (affichée avec une barre de progression)
+$partIdx = array_search('Part (%)', $table['head'], true);
+?>
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rapports & statistiques - Bertin Movie</title>
+    <link rel="stylesheet" href="/film_web_dy/style.css?v=3">
+    <link rel="stylesheet" href="/film_web_dy/admin/hx-style.css?v=4">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+        /* =========================================================
+           RAPPORTS — compléments au design "hx-" (hx-style.css)
+        ========================================================= */
+        .hx-rpt {
+            max-width: 1240px;
+        }
+
+        .hx-tab {
+            text-decoration: none;
+            padding-right: 14px;
+        }
+
+        /* ---------- Panneaux (formulaires) ---------- */
+        .rpt-panel {
+            margin-bottom: 18px;
+            padding: 18px;
+            background: var(--hx-bg);
+            border: 1px solid var(--hx-line);
+            border-radius: 18px;
+            box-shadow: var(--hx-sh);
+        }
+
+        .rpt-panel-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .rpt-hint {
+            margin: 0;
+            font-size: 12.5px;
+            color: var(--hx-muted);
+        }
+
+        .rpt-hint i {
+            color: var(--hx-blue);
+            margin-right: 4px;
+        }
+
+        .rpt-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 14px;
+            align-items: end;
+        }
+
+        .rpt-form .hx-btn {
+            width: 100%;
+        }
+
+        .rpt-seg {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 4px;
+            background: var(--hx-bg-2);
+            border: 1px solid var(--hx-line);
+            border-radius: 12px;
+        }
+
+        .rpt-seg a {
+            padding: 8px 16px;
+            border-radius: 9px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--hx-muted);
+            text-decoration: none;
+            transition: all .2s ease;
+        }
+
+        .rpt-seg a:hover {
+            color: var(--hx-text);
+        }
+
+        .rpt-seg a.on {
+            background: var(--hx-blue);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, .35);
+        }
+
+        /* ---------- Cartes ---------- */
+        .rpt-card {
+            margin-bottom: 18px;
+            padding: 22px;
+            background: var(--hx-bg);
+            border: 1px solid var(--hx-line);
+            border-radius: 20px;
+            box-shadow: var(--hx-sh);
+            min-width: 0;
+        }
+
+        .rpt-card-h {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 0 0 18px;
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: -.01em;
+            color: var(--hx-text);
+        }
+
+        .rpt-card-h i {
+            flex: 0 0 auto;
+            width: 36px;
+            height: 36px;
+            display: grid;
+            place-items: center;
+            border-radius: 11px;
+            background: #dbeafe;
+            color: #3b82f6;
+            font-size: 14px;
+        }
+
+        body.dark-mode .rpt-card-h i {
+            background: #1e3a8a;
+            color: #93bbfc;
+        }
+
+        .rpt-chart {
+            position: relative;
+            width: 100%;
+        }
+
+        .rpt-note {
+            margin: 16px 0 0;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--hx-muted);
+        }
+
+        /* ---------- Tableaux ---------- */
+        .rpt-twrap {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            border: 1px solid var(--hx-line);
+            border-radius: 14px;
+        }
+
+        .rpt-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 14px;
+        }
+
+        .rpt-table th {
+            padding: 13px 18px;
+            background: var(--hx-bg-2);
+            border-bottom: 1px solid var(--hx-line);
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            text-align: left;
+            color: var(--hx-muted);
+            white-space: nowrap;
+        }
+
+        .rpt-table td {
+            padding: 13px 18px;
+            border-bottom: 1px solid var(--hx-line);
+            color: var(--hx-text);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            background: var(--hx-bg);
+            transition: background .15s ease;
+        }
+
+        .rpt-table th:not(:first-child),
+        .rpt-table td:not(:first-child) {
+            text-align: right;
+        }
+
+        .rpt-table td:first-child {
+            font-weight: 600;
+        }
+
+        .rpt-table tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .rpt-table tbody tr:hover td {
+            background: var(--hx-bg-2);
+        }
+
+        .rpt-table td.wrap {
+            white-space: normal;
+        }
+
+        .rpt-part {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .rpt-part em {
+            min-width: 52px;
+            font-style: normal;
+            font-weight: 600;
+        }
+
+        .rpt-part span {
+            display: block;
+            width: 96px;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--hx-line);
+            overflow: hidden;
+        }
+
+        .rpt-part span i {
+            display: block;
+            height: 100%;
+            border-radius: 3px;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+        }
+
+        .rpt-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 11px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .rpt-pill.up {
+            background: #dcfce7;
+            color: #16a34a;
+        }
+
+        .rpt-pill.down {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .rpt-pill.flat {
+            background: var(--hx-bg-2);
+            color: var(--hx-muted);
+            border: 1px solid var(--hx-line);
+        }
+
+        .rpt-pill.prev {
+            background: #ede9fe;
+            color: #7c3aed;
+        }
+
+        body.dark-mode .rpt-pill.up {
+            background: rgba(34, 197, 94, .18);
+            color: #86efac;
+        }
+
+        body.dark-mode .rpt-pill.down {
+            background: rgba(239, 68, 68, .18);
+            color: #fca5a5;
+        }
+
+        body.dark-mode .rpt-pill.prev {
+            background: rgba(139, 92, 246, .22);
+            color: #c4b5fd;
+        }
+
+        .rpt-up {
+            color: #16a34a;
+            font-weight: 700;
+        }
+
+        .rpt-down {
+            color: #dc2626;
+            font-weight: 700;
+        }
+
+        body.dark-mode .rpt-up {
+            color: #86efac;
+        }
+
+        body.dark-mode .rpt-down {
+            color: #fca5a5;
+        }
+
+        .rpt-dot {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            margin-right: 6px;
+            border-radius: 50%;
+        }
+
+        /* ---------- Comparatif ---------- */
+        .rpt-vs {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 14px;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+
+        .rpt-side {
+            min-width: 0;
+            padding: 20px 22px;
+            border-radius: 20px;
+            color: #fff;
+        }
+
+        .rpt-a {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            box-shadow: 0 14px 28px -14px rgba(59, 130, 246, .7);
+        }
+
+        .rpt-b {
+            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+            box-shadow: 0 14px 28px -14px rgba(139, 92, 246, .7);
+        }
+
+        .rpt-side small {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            opacity: .8;
+        }
+
+        .rpt-side b {
+            display: block;
+            margin-top: 4px;
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -.02em;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .rpt-side span {
+            display: block;
+            margin-top: 8px;
+            font-size: 13px;
+            opacity: .9;
+        }
+
+        .rpt-vsbadge {
+            width: 46px;
+            height: 46px;
+            display: grid;
+            place-items: center;
+            border: 1px solid var(--hx-line);
+            border-radius: 50%;
+            background: var(--hx-bg);
+            color: var(--hx-muted);
+            font-size: 13px;
+            font-weight: 800;
+            box-shadow: var(--hx-sh);
+        }
+
+        .rpt-cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 18px;
+        }
+
+        .rpt-bar {
+            margin-bottom: 16px;
+        }
+
+        .rpt-bar:last-child {
+            margin-bottom: 0;
+        }
+
+        .rpt-bar-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 14px;
+            color: var(--hx-text);
+        }
+
+        .rpt-bar-top b {
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        .rpt-bar-top span {
+            flex: 0 0 auto;
+            color: var(--hx-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .rpt-track {
+            height: 8px;
+            margin-top: 7px;
+            border-radius: 4px;
+            background: var(--hx-line);
+            overflow: hidden;
+        }
+
+        .rpt-track i {
+            display: block;
+            height: 100%;
+            border-radius: 4px;
+            background: var(--bc, #3b82f6);
+        }
+
+        /* ---------- Alertes ---------- */
+        .hx-alert--warn {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+
+        body.dark-mode .hx-alert--warn {
+            background: rgba(245, 158, 11, .16);
+            border-color: rgba(245, 158, 11, .3);
+            color: #fcd34d;
+        }
+
+        .hx-alert {
+            align-items: flex-start;
+            line-height: 1.6;
+        }
+
+        .hx-alert>i {
+            margin-top: 3px;
+        }
+
+        /* ---------- Tablette / mobile ---------- */
+        @media (max-width: 860px) {
+            .rpt-cols {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .rpt-panel {
+                padding: 14px;
+                border-radius: 16px;
+            }
+
+            .rpt-form {
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+            }
+
+            .rpt-form>.rpt-full {
+                grid-column: 1 / -1;
+            }
+
+            .rpt-card {
+                padding: 16px;
+                border-radius: 16px;
+            }
+
+            .rpt-card-h {
+                font-size: 15px;
+                margin-bottom: 14px;
+            }
+
+            .rpt-seg {
+                display: flex;
+            }
+
+            .rpt-seg a {
+                flex: 1 1 0;
+                text-align: center;
+                padding: 9px 8px;
+            }
+
+            .rpt-table {
+                font-size: 13px;
+            }
+
+            .rpt-table th,
+            .rpt-table td {
+                padding: 11px 12px;
+            }
+
+            .rpt-table th:first-child,
+            .rpt-table td:first-child {
+                position: sticky;
+                left: 0;
+                z-index: 1;
+                box-shadow: 1px 0 0 var(--hx-line);
+            }
+
+            .rpt-table th:first-child {
+                background: var(--hx-bg-2);
+            }
+
+            .rpt-table tbody tr:hover td:first-child {
+                background: var(--hx-bg-2);
+            }
+
+            .rpt-part span {
+                width: 56px;
+            }
+
+            .rpt-part em {
+                min-width: 44px;
+            }
+
+            .rpt-vs {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+
+            .rpt-vsbadge {
+                margin: -4px auto;
+                width: 40px;
+                height: 40px;
+            }
+
+            .rpt-side {
+                padding: 16px 18px;
+                border-radius: 16px;
+            }
+
+            .rpt-side b {
+                font-size: 19px;
+            }
+        }
+
+        /* ---------- Impression : on retire la navigation ---------- */
+        @media print {
+
+            .navbar,
+            .sidebar,
+            .overlay,
+            .bottom-nav,
+            .rpt-noprint,
+            .hx-actions,
+            .logout-modal-overlay,
+            .confirm-modal-overlay {
+                display: none !important;
+            }
+
+            body {
+                padding-top: 0 !important;
+            }
+
+            .rpt-card,
+            .hx-stat {
+                box-shadow: none;
+                break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <?php include(__DIR__ . "/../includes/menu.php"); ?>
+
+    <div class="content hx-wrap hx-rpt">
+
+        <!-- ===== EN-TÊTE ===== -->
+        <div class="hx-head">
+            <div class="hx-title">
+                <div class="hx-title-ico"><i class="fas fa-chart-pie"></i></div>
+                <div>
+                    <h1>Rapports &amp; statistiques</h1>
+                    <p><?= e($titres[$type][1]) ?></p>
+                </div>
+            </div>
+            <?php if ($type === 'periodique' || $type === 'personnalise'): ?>
+                <div class="hx-actions rpt-noprint">
+                    <a class="hx-btn hx-btn--primary" href="<?= e(qs(['export' => 'csv'])) ?>"><i
+                            class="fas fa-file-csv"></i> Exporter CSV</a>
+                    <button type="button" class="hx-btn hx-btn--violet" onclick="window.print()"><i
+                            class="fas fa-print"></i> Imprimer / PDF</button>
+                    <a class="hx-btn hx-btn--primary" href="<?= e(qs(['export' => 'xlsx'])) ?>"><i
+                            class="fas fa-file-excel"></i> Excel (.xlsx)</a>
+                    <a class="hx-btn hx-btn--violet" href="<?= e(qs(['export' => 'pdf'])) ?>"><i
+                            class="fas fa-file-pdf"></i> PDF</a>
+                </div>
+            <?php endif; ?>
+            <?php if ($type === 'comparatif' || $type === 'prevision'): ?>
+                <div class="hx-actions rpt-noprint">
+                    <a class="hx-btn hx-btn--primary" href="<?= e(qs(['export' => 'xlsx'])) ?>"><i
+                            class="fas fa-file-excel"></i> Excel (.xlsx)</a>
+                    <a class="hx-btn hx-btn--violet" href="<?= e(qs(['export' => 'pdf'])) ?>"><i
+                            class="fas fa-file-pdf"></i> PDF</a>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <?php if ($erreurs): ?>
+            <div class="hx-alert hx-alert--err">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div>
+                    <strong>Erreur SQL (visible par l'admin uniquement)</strong><br>
+                    <?php foreach (array_unique($erreurs) as $m): ?>• <?= e($m) ?><br><?php endforeach; ?>
+                    Vérifiez que ces noms de tables/colonnes existent bien dans votre base.
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- ===== ONGLETS ===== -->
+        <div class="hx-tabs rpt-noprint">
+            <?php foreach ($titres as $k => [$ico, $lib]): ?>
+                <a href="?type=<?= $k ?>" class="hx-tab <?= $type === $k ? 'active' : '' ?>"><i class="fas <?= $ico ?>"></i>
+                    <?= e($lib) ?></a>
+            <?php endforeach; ?>
+        </div>
+
+        <?php /* ================= PÉRIODIQUE ================= */ if ($type === 'periodique'): ?>
+            <div class="hx-stats hx-stats--4">
+                <div class="hx-stat hx-stat--blue">
+                    <div class="hx-stat-ico"><i class="fas fa-film"></i></div>
+                    <div><strong><?= (int) $snap['films'] ?></strong><span>Films</span></div>
+                </div>
+                <div class="hx-stat hx-stat--violet">
+                    <div class="hx-stat-ico"><i class="fas fa-users"></i></div>
+                    <div><strong><?= (int) $snap['acteurs'] ?></strong><span>Acteurs</span></div>
+                </div>
+                <div class="hx-stat hx-stat--green">
+                    <div class="hx-stat-ico"><i class="fas fa-user-tie"></i></div>
+                    <div><strong><?= (int) $snap['real'] ?></strong><span>Réalisateurs</span></div>
+                </div>
+                <div class="hx-stat hx-stat--orange">
+                    <div class="hx-stat-ico"><i class="fas fa-calendar-xmark"></i></div>
+                    <div><strong><?= (int) $snap['sans_date'] ?></strong><span>Sans date de sortie</span></div>
+                </div>
+            </div>
+
+            <div class="rpt-panel rpt-noprint">
+                <div class="rpt-panel-top">
+                    <div class="rpt-seg">
+                        <a href="<?= e(qs(['freq' => 'annuel'])) ?>"
+                            class="<?= $freq === 'annuel' ? 'on' : '' ?>">Annuel</a>
+                        <a href="<?= e(qs(['freq' => 'mensuel', 'annee' => $annee])) ?>"
+                            class="<?= $freq === 'mensuel' ? 'on' : '' ?>">Mensuel</a>
+                    </div>
+                    <p class="rpt-hint"><i class="fas fa-info-circle"></i> Période = date de sortie des films (<?= $anMin ?>
+                        → <?= $anMax ?>)</p>
+                </div>
+                <?php if ($freq === 'mensuel'): ?>
+                    <form class="rpt-form" method="get">
+                        <input type="hidden" name="type" value="periodique">
+                        <input type="hidden" name="freq" value="mensuel">
+                        <div>
+                            <span class="hx-lab">Année</span>
+                            <label class="hx-field"><i class="fas fa-calendar-alt"></i>
+                                <input type="number" name="annee" value="<?= (int) $annee ?>" min="1850" max="2200"
+                                    onchange="this.form.submit()">
+                            </label>
+                        </div>
+                    </form>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php /* ================= PERSONNALISÉ ================= */ if ($type === 'personnalise'): ?>
+            <div class="rpt-panel rpt-noprint">
+                <form class="rpt-form" method="get">
+                    <input type="hidden" name="type" value="personnalise">
+                    <div class="<?= $entite === 'films' ? '' : '' ?>">
+                        <span class="hx-lab">Entité</span>
+                        <label class="hx-field"><i class="fas fa-layer-group"></i>
+                            <select name="entite" onchange="this.form.groupe.value=''; this.form.submit()">
+                                <option value="films" <?= $entite === 'films' ? 'selected' : '' ?>>Films</option>
+                                <option value="acteurs" <?= $entite === 'acteurs' ? 'selected' : '' ?>>Acteurs</option>
+                                <option value="realisateurs" <?= $entite === 'realisateurs' ? 'selected' : '' ?>>Réalisateurs
+                                </option>
+                            </select>
+                        </label>
+                    </div>
+                    <div>
+                        <span class="hx-lab">Regrouper</span>
+                        <label class="hx-field"><i class="fas fa-object-group"></i>
+                            <select name="groupe">
+                                <?php foreach ($groupes[$entite] as $k => $l): ?>
+                                    <option value="<?= e($k) ?>" <?= $groupe === $k ? 'selected' : '' ?>><?= e($l) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                    </div>
+                    <?php if ($entite === 'films'): ?>
+                        <div>
+                            <span class="hx-lab">Année de</span>
+                            <label class="hx-field"><i class="fas fa-calendar-alt"></i>
+                                <input type="number" name="c_debut" value="<?= $cd ?? '' ?>"
+                                    placeholder="<?= $anMin ?>"></label>
+                        </div>
+                        <div>
+                            <span class="hx-lab">à</span>
+                            <label class="hx-field"><i class="fas fa-calendar-check"></i>
+                                <input type="number" name="c_fin" value="<?= $cf ?? '' ?>" placeholder="<?= $anMax ?>"></label>
+                        </div>
+                        <div>
+                            <span class="hx-lab">Catégorie</span>
+                            <label class="hx-field"><i class="fas fa-tag"></i>
+                                <select name="cat">
+                                    <option value="0">Toutes</option>
+                                    <?php foreach ($categories as $c): ?>
+                                        <option value="<?= (int) $c['id_categorie'] ?>" <?= $cc === (int) $c['id_categorie'] ? 'selected' : '' ?>><?= e($c['nom_categorie']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                        </div>
+                        <div>
+                            <span class="hx-lab">Langue</span>
+                            <label class="hx-field"><i class="fas fa-language"></i>
+                                <select name="lang">
+                                    <option value="0">Toutes</option>
+                                    <?php foreach ($langues as $l): ?>
+                                        <option value="<?= (int) $l['id_langue'] ?>" <?= $cl === (int) $l['id_langue'] ? 'selected' : '' ?>><?= e($l['nom_langue']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                        </div>
+                    <?php endif; ?>
+                    <div class="rpt-full">
+                        <button class="hx-btn hx-btn--primary"><i class="fas fa-check"></i> Générer</button>
+                    </div>
+                </form>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($type === 'periodique' || $type === 'personnalise'): ?>
+            <?php if ($table['rows']): ?>
+                <div class="rpt-card">
+                    <h3 class="rpt-card-h"><i class="fas fa-chart-bar"></i> Graphique</h3>
+                    <div class="rpt-chart" id="chartBox"><canvas id="chart"></canvas></div>
+                </div>
+                <div class="rpt-card">
+                    <h3 class="rpt-card-h"><i class="fas fa-table"></i> Détail</h3>
+                    <div class="rpt-twrap">
+                        <table class="rpt-table">
+                            <thead>
+                                <tr><?php foreach ($table['head'] as $hd): ?>
+                                        <th><?= e($hd) ?></th><?php endforeach; ?>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($table['rows'] as $row): ?>
+                                    <tr>
+                                        <?php foreach ($row as $ci => $cell): ?>
+                                            <?php if ($partIdx !== false && $ci === $partIdx): ?>
+                                                <td>
+                                                    <div class="rpt-part"><em><?= e($cell) ?> %</em><span><i
+                                                                style="width:<?= max(0, min(100, (float) $cell)) ?>%"></i></span></div>
+                                                </td>
+                                            <?php else: ?>
+                                                <td><?= e($cell) ?></td>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php else: ?>
+                <div class="hx-empty">
+                    <div class="hx-empty-ico"><i class="fas fa-chart-simple"></i></div>
+                    <h3>Aucune donnée</h3>
+                    <p>Aucun résultat pour ces critères. Essayez de les modifier.</p>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
+
+        <?php /* ================= COMPARATIF ================= */ if ($type === 'comparatif'): ?>
+            <div class="rpt-panel rpt-noprint">
+                <div class="rpt-panel-top">
+                    <div class="rpt-seg">
+                        <a href="?type=comparatif&mode=periodes"
+                            class="<?= $mode === 'periodes' ? 'on' : '' ?>">Périodes</a>
+                        <a href="?type=comparatif&mode=realisateurs"
+                            class="<?= $mode === 'realisateurs' ? 'on' : '' ?>">Réalisateurs</a>
+                        <a href="?type=comparatif&mode=acteurs" class="<?= $mode === 'acteurs' ? 'on' : '' ?>">Acteurs</a>
+                    </div>
+                </div>
+                <form class="rpt-form" method="get">
+                    <input type="hidden" name="type" value="comparatif">
+                    <input type="hidden" name="mode" value="<?= e($mode) ?>">
+                    <?php if ($mode === 'periodes'): ?>
+                        <?php foreach (['a1' => ['A : de', $a1], 'a2' => ['A : à', $a2], 'b1' => ['B : de', $b1], 'b2' => ['B : à', $b2]] as $nm => [$lab, $val]): ?>
+                            <div>
+                                <span class="hx-lab"><?= e($lab) ?></span>
+                                <label class="hx-field"><i class="fas fa-calendar-alt"></i>
+                                    <input type="number" name="<?= $nm ?>" value="<?= (int) $val ?>"></label>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <?php foreach (['id_a' => ['A', $idA], 'id_b' => ['B', $idB]] as $nm => [$lab, $sel]): ?>
+                            <div>
+                                <span class="hx-lab"><?= $lab ?></span>
+                                <label class="hx-field"><i
+                                        class="fas <?= $mode === 'realisateurs' ? 'fa-user-tie' : 'fa-user' ?>"></i>
+                                    <select name="<?= $nm ?>">
+                                        <?php foreach ($liste as $x): ?>
+                                            <option value="<?= (int) $x['id'] ?>" <?= $sel === (int) $x['id'] ? 'selected' : '' ?>>
+                                                <?= e($x['nom']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    <div class="rpt-full">
+                        <button class="hx-btn hx-btn--primary"><i class="fas fa-balance-scale"></i> Comparer</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="rpt-vs">
+                <div class="rpt-side rpt-a">
+                    <small>Groupe A</small>
+                    <b><?= e($cmp[0]['label']) ?></b>
+                    <span><i class="fas fa-film"></i> <?= (int) ($cmp[0]['stats']['nb_films'] ?? 0) ?> film(s)</span>
+                </div>
+                <div class="rpt-vsbadge">VS</div>
+                <div class="rpt-side rpt-b">
+                    <small>Groupe B</small>
+                    <b><?= e($cmp[1]['label']) ?></b>
+                    <span><i class="fas fa-film"></i> <?= (int) ($cmp[1]['stats']['nb_films'] ?? 0) ?> film(s)</span>
+                </div>
+            </div>
+
+            <div class="rpt-card">
+                <h3 class="rpt-card-h"><i class="fas fa-chart-bar"></i> Comparaison graphique</h3>
+                <div class="rpt-chart" id="chartBox"><canvas id="chart"></canvas></div>
+            </div>
+
+            <div class="rpt-card">
+                <h3 class="rpt-card-h"><i class="fas fa-table"></i> Indicateurs</h3>
+                <div class="rpt-twrap">
+                    <table class="rpt-table">
+                        <thead>
+                            <tr>
+                                <th>Indicateur</th>
+                                <th><span class="rpt-dot" style="background:#3b82f6"></span>A</th>
+                                <th><span class="rpt-dot" style="background:#8b5cf6"></span>B</th>
+                                <th>Écart</th>
+                                <th>Variation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($METS as $k => $lab):
+                                $va = (float) ($cmp[0]['stats'][$k] ?? 0);
+                                $vb = (float) ($cmp[1]['stats'][$k] ?? 0);
+                                $diff = round($vb - $va, 1);
+                                $pc = $diff > 0 ? 'up' : ($diff < 0 ? 'down' : 'flat'); ?>
+                                <tr>
+                                    <td><?= e($lab) ?></td>
+                                    <td><?= e($cmp[0]['stats'][$k] ?? 0) ?></td>
+                                    <td><?= e($cmp[1]['stats'][$k] ?? 0) ?></td>
+                                    <td class="<?= $diff > 0 ? 'rpt-up' : ($diff < 0 ? 'rpt-down' : '') ?>">
+                                        <?= ($diff > 0 ? '+' : '') . $diff ?></td>
+                                    <td><span class="rpt-pill <?= $pc ?>"><?= e(variation($va, $vb)) ?></span></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="rpt-cols">
+                <?php foreach ($cmp as $i => $c):
+                    $mx = $c['cats'] ? max(array_map('intval', array_column($c['cats'], 'nb'))) : 0; ?>
+                    <div class="rpt-card">
+                        <h3 class="rpt-card-h"><i class="fas fa-tags"></i> Top catégories — <?= $i === 0 ? 'A' : 'B' ?></h3>
+                        <?php foreach ($c['cats'] as $t): ?>
+                            <div class="rpt-bar">
+                                <div class="rpt-bar-top"><b><?= e($t['libelle']) ?></b><span><?= (int) $t['nb'] ?> film(s)</span>
+                                </div>
+                                <div class="rpt-track"><i
+                                        style="width:<?= $mx > 0 ? round($t['nb'] * 100 / $mx) : 0 ?>%;--bc:<?= $i === 0 ? '#3b82f6' : '#8b5cf6' ?>"></i>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                        <?php if (!$c['cats']): ?>
+                            <p class="rpt-hint">Aucune donnée</p><?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php /* ================= PRÉVISION ================= */ if ($type === 'prevision'): ?>
+            <div class="rpt-panel rpt-noprint">
+                <form class="rpt-form" method="get">
+                    <input type="hidden" name="type" value="prevision">
+                    <div>
+                        <span class="hx-lab">Indicateur</span>
+                        <label class="hx-field"><i class="fas fa-chart-line"></i>
+                            <select name="met" onchange="this.form.submit()">
+                                <?php foreach ($PM as $k => $l): ?>
+                                    <option value="<?= $k ?>" <?= $met === $k ? 'selected' : '' ?>><?= e($l) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                    </div>
+                    <div>
+                        <span class="hx-lab">Années à prévoir</span>
+                        <label class="hx-field"><i class="fas fa-forward"></i>
+                            <input type="number" name="nb" min="1" max="5" value="<?= $h ?>"></label>
+                    </div>
+                    <div class="rpt-full">
+                        <button class="hx-btn hx-btn--primary"><i class="fas fa-calculator"></i> Calculer</button>
+                    </div>
+                </form>
+            </div>
+
+            <?php if (!$ok): ?>
+                <div class="hx-empty">
+                    <div class="hx-empty-ico"><i class="fas fa-chart-line"></i></div>
+                    <h3>Pas assez de données</h3>
+                    <p>Il faut des films répartis sur au moins 3 années différentes (date de sortie) pour calculer une
+                        prévision.</p>
+                </div>
+            <?php else:
+                $premAn = array_key_first($prev);
+                $r2c = $reg['r2'] >= 0.7 ? 'green' : ($reg['r2'] >= 0.5 ? 'blue' : 'orange'); ?>
+                <div class="hx-stats">
+                    <div class="hx-stat hx-stat--violet">
+                        <div class="hx-stat-ico"><i class="fas fa-arrow-trend-up"></i></div>
+                        <div><strong><?= ($reg['a'] > 0 ? '+' : '') . round($reg['a'], 2) ?></strong><span>Pente / an</span>
+                        </div>
+                    </div>
+                    <div class="hx-stat hx-stat--<?= $r2c ?>">
+                        <div class="hx-stat-ico"><i class="fas fa-bullseye"></i></div>
+                        <div><strong><?= round($reg['r2'], 2) ?></strong><span>Fiabilité (R²)</span></div>
+                    </div>
+                    <div class="hx-stat hx-stat--blue">
+                        <div class="hx-stat-ico"><i class="fas fa-wand-magic-sparkles"></i></div>
+                        <div><strong><?= e($prev[$premAn]) ?><small> en <?= (int) $premAn ?></small></strong><span>Prochaine
+                                prévision</span></div>
+                    </div>
+                </div>
+
+                <div class="rpt-card">
+                    <h3 class="rpt-card-h"><i class="fas fa-chart-line"></i> <?= e($PM[$met]) ?></h3>
+                    <div class="rpt-chart" id="chartBox"><canvas id="chart"></canvas></div>
+                </div>
+
+                <div class="rpt-card">
+                    <h3 class="rpt-card-h"><i class="fas fa-table"></i> Réel et prévisions</h3>
+                    <div class="rpt-twrap">
+                        <table class="rpt-table">
+                            <thead>
+                                <tr>
+                                    <th>Année</th>
+                                    <th><?= e($PM[$met]) ?></th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($xs as $i => $x): ?>
+                                    <tr>
+                                        <td><?= $x ?></td>
+                                        <td><?= e($ys[$i]) ?></td>
+                                        <td><span class="rpt-pill flat">Réel</span></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                <?php foreach ($prev as $y => $v): ?>
+                                    <tr>
+                                        <td><?= $y ?></td>
+                                        <td><strong><?= e($v) ?></strong></td>
+                                        <td><span class="rpt-pill prev">Prévision</span></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="rpt-note">
+                        Méthode : régression linéaire sur <?= count($xs) ?> années. Une prévision n'est qu'une estimation basée
+                        sur le passé.
+                    </p>
+                </div>
+
+                <?php if ($reg['r2'] < 0.5): ?>
+                    <div class="hx-alert hx-alert--warn">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <div>R² faible : la tendance est peu fiable, prenez la prévision avec prudence.</div>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
+        <?php endif; ?>
+
+    </div><!-- /.content -->
+
+    <script>
+        (function () {
+            const CFG = <?= json_encode($jsCfg) ?>;
+            const el = document.getElementById('chart');
+            if (!el || !CFG) return;
+
+            const box = document.getElementById('chartBox');
+            const small = window.matchMedia('(max-width: 640px)').matches;
+            box.style.height = (small && !CFG.horizontal ? Math.min(CFG.height, 280) : CFG.height) + 'px';
+
+            const palette = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'];
+            let chart = null;
+
+            function colors() {
+                const dark = document.body.classList.contains('dark-mode');
+                return {
+                    txt: dark ? '#94a3b8' : '#64748b',
+                    grid: dark ? 'rgba(148,163,184,.15)' : 'rgba(100,116,139,.15)',
+                    leg: dark ? '#e2e8f0' : '#0f172a',
+                    tip: dark ? '#0f172a' : '#0f172a'
+                };
+            }
+
+            function draw() {
+                if (chart) chart.destroy();
+                const c = colors();
+                Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+                Chart.defaults.font.size = small ? 11 : 12;
+                const axis = { ticks: { color: c.txt }, grid: { color: c.grid, drawBorder: false }, border: { display: false } };
+                const common = {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { labels: { color: c.leg, usePointStyle: true, boxWidth: 8, padding: 16 } },
+                        tooltip: { backgroundColor: c.tip, titleColor: '#fff', bodyColor: '#e2e8f0', padding: 12, cornerRadius: 10, boxPadding: 6 }
+                    }
+                };
+
+                if (CFG.kind === 'forecast') {
+                    const n = CFG.reel.length;
+                    chart = new Chart(el, {
+                        type: 'line',
+                        data: {
+                            labels: CFG.labels,
+                            datasets: [
+                                { label: 'Réel', data: CFG.reel, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,.12)', fill: true, borderWidth: 3, pointRadius: 3, pointBackgroundColor: '#3b82f6', tension: .35 },
+                                { label: 'Tendance', data: CFG.tendance, borderColor: '#94a3b8', borderDash: [4, 4], borderWidth: 2, pointRadius: 0 },
+                                { label: 'Prévision', data: [...Array(n - 1).fill(null), CFG.reel[n - 1], ...CFG.prev], borderColor: '#8b5cf6', backgroundColor: '#8b5cf6', borderDash: [8, 5], borderWidth: 3, pointRadius: 4, tension: .35 }
+                            ]
+                        },
+                        options: Object.assign({}, common, { scales: { x: axis, y: Object.assign({ beginAtZero: true }, axis) } })
+                    });
+                } else {
+                    const single = CFG.datasets.length === 1;
+                    const ds = CFG.datasets.map((d, i) => Object.assign({}, d, {
+                        backgroundColor: single ? '#3b82f6' : palette[i % palette.length],
+                        hoverBackgroundColor: single ? '#2563eb' : palette[i % palette.length],
+                        borderRadius: 8,
+                        borderSkipped: false,
+                        maxBarThickness: 46
+                    }));
+                    chart = new Chart(el, {
+                        type: 'bar',
+                        data: { labels: CFG.labels, datasets: ds },
+                        options: Object.assign({}, common, {
+                            indexAxis: CFG.horizontal ? 'y' : 'x',
+                            plugins: Object.assign({}, common.plugins, { legend: { display: !single, labels: common.plugins.legend.labels } }),
+                            scales: { x: Object.assign({ beginAtZero: true }, axis), y: Object.assign({ beginAtZero: true }, axis) }
+                        })
+                    });
+                }
+            }
+
+            draw();
+            // Redessiner quand on bascule en mode sombre / clair
+            new MutationObserver(draw).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        })();
+    </script>
+</body>
+
+</html>

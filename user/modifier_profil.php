@@ -1,0 +1,674 @@
+<?php
+require_once __DIR__ . '/../includes/session_boot.php';
+require_once __DIR__ . '/../connexion.php';
+require_once __DIR__ . '/../includes/auth_check.php';
+require_once __DIR__ . '/../includes/permissions.php';
+require_permission('modifier_profil');
+require_once __DIR__ . '/../includes/update_session.php';
+
+if (isset($_SESSION['user_id'])) {
+    updateUserSession($pdo, $_SESSION['user_id']);
+}
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: ../index.php');
+    exit;
+}
+
+$user_id = $_SESSION['user_id'];
+$stmt = $pdo->prepare("SELECT * FROM utilisateur WHERE id_utilisateur = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch();
+
+$pays = $pdo->query("SELECT * FROM pays ORDER BY nom_pays")->fetchAll();
+
+$msg = '';
+$type = '';
+
+if (isset($_POST['update'])) {
+    $nom_utilisateur = trim($_POST['nom_utilisateur']);
+    $prenom = trim($_POST['prenom']);
+    $nom = trim($_POST['nom']);
+    $sexe = $_POST['sexe'];
+    $date_naissance = $_POST['date_naissance'];
+    $id_pays = $_POST['id_pays'];
+
+    if (empty($nom_utilisateur)) {
+        $msg = "Le nom d'utilisateur est requis";
+        $type = 'error';
+    } else {
+        try {
+            // Vérifier si le nom d'utilisateur existe déjà
+            $check_user = $pdo->prepare("SELECT id_utilisateur FROM utilisateur WHERE nom_utilisateur = ? AND id_utilisateur != ?");
+            $check_user->execute([$nom_utilisateur, $user_id]);
+            if ($check_user->fetch()) {
+                $msg = "Ce nom d'utilisateur est déjà pris";
+                $type = 'error';
+            } else {
+                $pdo->prepare("UPDATE utilisateur SET 
+                    nom_utilisateur = ?, 
+                    prenom = ?, 
+                    nom = ?, 
+                    sexe = ?, 
+                    date_naissance = ?, 
+                    id_pays = ? 
+                    WHERE id_utilisateur = ?")
+                    ->execute([$nom_utilisateur, $prenom, $nom, $sexe, $date_naissance, $id_pays, $user_id]);
+
+                $_SESSION['user_nom'] = $nom_utilisateur;
+                $msg = "✅ Profil mis à jour avec succès !";
+                $type = 'success';
+
+                $stmt = $pdo->prepare("SELECT * FROM utilisateur WHERE id_utilisateur = ?");
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch();
+            }
+        } catch (PDOException $e) {
+            $msg = "Erreur lors de la mise à jour";
+            $type = 'error';
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title data-lang-fr="Modifier mon profil" data-lang-en="Edit my profile">Modifier mon profil</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/film_web_dy/user/css/style-user.css">
+    <style>
+        /* =========================================================
+           MODIFIER PROFIL - DESIGN MODERNE
+           ========================================================= */
+
+        .modif-container {
+            max-width: 600px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 10px 16px 100px;
+        }
+
+        /* =========================================================
+           BOUTON RETOUR
+           ========================================================= */
+        .btn-back {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary, #64748b);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            margin-bottom: 16px;
+            padding: 10px 18px;
+            background: var(--bg-card, #ffffff);
+            border-radius: 12px;
+            border: 1px solid var(--border-color, #e2e8f0);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        body.dark-mode .btn-back {
+            background: #1e293b;
+            border-color: #334155;
+            color: #94a3b8;
+        }
+
+        .btn-back:hover {
+            color: #3b82f6;
+            transform: translateX(-4px);
+            border-color: #3b82f6;
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.12);
+        }
+
+        body.dark-mode .btn-back:hover {
+            color: #60a5fa;
+            border-color: #3b82f6;
+        }
+
+        /* =========================================================
+           CARTE PRINCIPALE
+           ========================================================= */
+        .modif-card {
+            background: var(--bg-card, #ffffff);
+            border-radius: 20px;
+            padding: 32px 32px 34px;
+            border: 1px solid var(--border-color, #e2e8f0);
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.05);
+            transition: box-shadow 0.3s ease;
+        }
+
+        body.dark-mode .modif-card {
+            background: #1e293b;
+            border-color: #334155;
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.15);
+        }
+
+        .modif-card:hover {
+            box-shadow: 0 4px 30px rgba(59, 130, 246, 0.08);
+        }
+
+        body.dark-mode .modif-card:hover {
+            box-shadow: 0 4px 30px rgba(59, 130, 246, 0.12);
+        }
+
+        .modif-card h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary, #0f172a);
+            text-align: center;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        body.dark-mode .modif-card h2 {
+            color: #e2e8f0;
+        }
+
+        .modif-card h2 i {
+            color: #3b82f6;
+            font-size: 26px;
+        }
+
+        /* =========================================================
+           MESSAGES
+           ========================================================= */
+        .msg {
+            padding: 14px 18px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 500;
+        }
+
+        .msg.success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+        }
+
+        body.dark-mode .msg.success {
+            background: #052e16;
+            color: #86efac;
+            border-color: #166534;
+        }
+
+        .msg.error {
+            background: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+
+        body.dark-mode .msg.error {
+            background: #450a0a;
+            color: #fca5a5;
+            border-color: #7f1d1d;
+        }
+
+        .msg i {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .msg.success i {
+            color: #22c55e;
+        }
+
+        .msg.error i {
+            color: #ef4444;
+        }
+
+        /* =========================================================
+           FORMULAIRE
+           ========================================================= */
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-secondary, #475569);
+        }
+
+        body.dark-mode .form-group label {
+            color: #94a3b8;
+        }
+
+        .form-group label i {
+            margin-right: 6px;
+            color: #3b82f6;
+            width: 16px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid var(--border-color, #e2e8f0);
+            border-radius: 12px;
+            font-size: 14px;
+            background: var(--bg-input, #f8fafc);
+            transition: all 0.3s ease;
+            font-family: inherit;
+            color: var(--text-primary, #0f172a);
+        }
+
+        body.dark-mode .form-group input,
+        body.dark-mode .form-group select {
+            background: #0f172a;
+            border-color: #334155;
+            color: #e2e8f0;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: var(--bg-card, #ffffff);
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+        }
+
+        body.dark-mode .form-group input:focus,
+        body.dark-mode .form-group select:focus {
+            background: #1e293b;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12);
+        }
+
+        .form-group input::placeholder {
+            color: var(--text-secondary, #94a3b8);
+        }
+
+        body.dark-mode .form-group input::placeholder {
+            color: #64748b;
+        }
+
+        /* =========================================================
+           EMAIL EN LECTURE SEULE
+           ========================================================= */
+        .email-readonly {
+            position: relative;
+        }
+
+        .form-group input[readonly] {
+            background: var(--bg-disabled, #f1f5f9);
+            color: var(--text-secondary, #64748b);
+            cursor: not-allowed;
+            border-color: var(--border-color, #e2e8f0);
+        }
+
+        body.dark-mode .form-group input[readonly] {
+            background: #0f172a;
+            color: #94a3b8;
+            border-color: #334155;
+        }
+
+        .form-group input[readonly]:focus {
+            box-shadow: none;
+            border-color: var(--border-color, #e2e8f0);
+            background: var(--bg-disabled, #f1f5f9);
+        }
+
+        body.dark-mode .form-group input[readonly]:focus {
+            border-color: #334155;
+            background: #0f172a;
+        }
+
+        .email-readonly .lock-icon {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary, #94a3b8);
+            font-size: 14px;
+        }
+
+        .email-hint {
+            font-size: 12px;
+            color: var(--text-secondary, #94a3b8);
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        body.dark-mode .email-hint {
+            color: #64748b;
+        }
+
+        .email-hint i {
+            color: var(--text-secondary, #64748b);
+        }
+
+        /* =========================================================
+           LIGNE DE CHAMPS
+           ========================================================= */
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        /* =========================================================
+           BOUTON ENREGISTRER
+           ========================================================= */
+        .btn-save {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 2px 12px rgba(59, 130, 246, 0.25);
+        }
+
+        .btn-save:hover {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 24px rgba(59, 130, 246, 0.35);
+        }
+
+        .btn-save:active {
+            transform: scale(0.97);
+        }
+
+        /* =========================================================
+           ANIMATION
+           ========================================================= */
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modif-card {
+            animation: slideUp 0.4s ease-out;
+        }
+
+        .btn-back {
+            animation: slideUp 0.4s ease-out 0.08s both;
+        }
+
+        /* =========================================================
+           RESPONSIVE - MOBILE
+           ========================================================= */
+        @media (max-width: 768px) {
+            .modif-container {
+                padding: 8px 12px 90px;
+            }
+
+            .modif-card {
+                padding: 24px 20px 26px;
+            }
+
+            .modif-card h2 {
+                font-size: 20px;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+                gap: 0;
+            }
+
+            .btn-save {
+                font-size: 15px;
+                padding: 14px;
+            }
+
+            .btn-back {
+                font-size: 13px;
+                padding: 8px 16px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .modif-container {
+                padding: 6px 8px 80px;
+            }
+
+            .modif-card {
+                padding: 18px 14px 22px;
+                border-radius: 16px;
+            }
+
+            .modif-card h2 {
+                font-size: 18px;
+            }
+
+            .modif-card h2 i {
+                font-size: 20px;
+            }
+
+            .form-group {
+                margin-bottom: 14px;
+            }
+
+            .form-group label {
+                font-size: 12px;
+            }
+
+            .form-group input,
+            .form-group select {
+                padding: 10px 14px;
+                font-size: 13px;
+                border-radius: 10px;
+            }
+
+            .btn-save {
+                font-size: 14px;
+                padding: 12px;
+                border-radius: 10px;
+            }
+
+            .btn-back {
+                font-size: 12px;
+                padding: 6px 14px;
+                border-radius: 10px;
+            }
+
+            .email-hint {
+                font-size: 11px;
+            }
+
+            .msg {
+                padding: 10px 14px;
+                font-size: 13px;
+                border-radius: 10px;
+            }
+
+            .msg i {
+                font-size: 16px;
+            }
+        }
+
+        @media (max-width: 380px) {
+            .modif-container {
+                padding: 4px 4px 70px;
+            }
+
+            .modif-card {
+                padding: 14px 10px 18px;
+                border-radius: 14px;
+            }
+
+            .modif-card h2 {
+                font-size: 16px;
+            }
+
+            .form-group label {
+                font-size: 11px;
+            }
+
+            .form-group input,
+            .form-group select {
+                padding: 8px 12px;
+                font-size: 12px;
+                border-radius: 8px;
+            }
+
+            .btn-save {
+                font-size: 13px;
+                padding: 10px;
+                border-radius: 8px;
+            }
+
+            .btn-save i {
+                font-size: 14px;
+            }
+
+            .btn-back {
+                font-size: 11px;
+                padding: 5px 12px;
+                border-radius: 8px;
+            }
+
+            .btn-back i {
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <?php include __DIR__ . '/includes/menu-user.php'; ?>
+
+    <div class="modif-container">
+
+        <a href="profil.php" class="btn-back">
+            <i class="fas fa-arrow-left"></i>
+            <span data-lang-fr="Retour au profil" data-lang-en="Back to profile">Retour au profil</span>
+        </a>
+
+        <div class="modif-card">
+            <h2>
+                <i class="fas fa-user-edit"></i>
+                <span data-lang-fr="Modifier mon profil" data-lang-en="Edit my profile">Modifier mon profil</span>
+            </h2>
+
+            <?php if ($msg): ?>
+                <div class="msg <?= $type ?>">
+                    <i class="fas <?= $type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+                    <?= $msg ?>
+                </div>
+            <?php endif; ?>
+
+            <form method="POST">
+                <!-- Nom d'utilisateur -->
+                <div class="form-group">
+                    <label><i class="fas fa-at"></i> <span data-lang-fr="Nom d'utilisateur" data-lang-en="Username">Nom
+                            d'utilisateur</span></label>
+                    <input type="text" name="nom_utilisateur" value="<?= htmlspecialchars($user['nom_utilisateur']) ?>"
+                        required placeholder="Votre pseudo">
+                </div>
+
+                <!-- Prénom + Nom -->
+                <div class="form-row">
+                    <div class="form-group">
+                        <label><i class="fas fa-user"></i> <span data-lang-fr="Prénom"
+                                data-lang-en="First name">Prénom</span></label>
+                        <input type="text" name="prenom" value="<?= htmlspecialchars($user['prenom'] ?? '') ?>"
+                            placeholder="Votre prénom">
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-user"></i> <span data-lang-fr="Nom"
+                                data-lang-en="Last name">Nom</span></label>
+                        <input type="text" name="nom" value="<?= htmlspecialchars($user['nom'] ?? '') ?>"
+                            placeholder="Votre nom">
+                    </div>
+                </div>
+
+                <!-- Email (lecture seule) -->
+                <div class="form-group">
+                    <label><i class="fas fa-envelope"></i> <span data-lang-fr="Email"
+                            data-lang-en="Email">Email</span></label>
+                    <div class="email-readonly">
+                        <input type="email" name="email" value="<?= htmlspecialchars($user['email'] ?? '') ?>" readonly
+                            required>
+                        <span class="lock-icon"><i class="fas fa-lock"></i></span>
+                    </div>
+                    <div class="email-hint">
+                        <i class="fas fa-info-circle"></i>
+                        <span data-lang-fr="L'email ne peut pas être modifié"
+                            data-lang-en="Email cannot be changed">L'email ne peut pas être modifié</span>
+                    </div>
+                </div>
+
+                <!-- Sexe + Date naissance -->
+                <div class="form-row">
+                    <div class="form-group">
+                        <label><i class="fas fa-venus-mars"></i> <span data-lang-fr="Sexe"
+                                data-lang-en="Gender">Sexe</span></label>
+                        <select name="sexe">
+                            <option value="">-- <span data-lang-fr="Sélectionner"
+                                    data-lang-en="Select">Sélectionner</span> --</option>
+                            <option value="M" <?= ($user['sexe'] ?? '') == 'M' ? 'selected' : '' ?>>
+                                <span data-lang-fr="Masculin" data-lang-en="Male">Masculin</span>
+                            </option>
+                            <option value="F" <?= ($user['sexe'] ?? '') == 'F' ? 'selected' : '' ?>>
+                                <span data-lang-fr="Féminin" data-lang-en="Female">Féminin</span>
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-calendar-alt"></i> <span data-lang-fr="Date naissance"
+                                data-lang-en="Birth date">Date naissance</span></label>
+                        <input type="date" name="date_naissance" value="<?= $user['date_naissance'] ?? '' ?>">
+                    </div>
+                </div>
+
+                <!-- Nationalité -->
+                <div class="form-group">
+                    <label><i class="fas fa-globe"></i> <span data-lang-fr="Nationalité"
+                            data-lang-en="Nationality">Nationalité</span></label>
+                    <select name="id_pays">
+                        <option value="">-- <span data-lang-fr="Sélectionner un pays"
+                                data-lang-en="Select a country">Sélectionner un pays</span> --</option>
+                        <?php foreach ($pays as $p): ?>
+                            <option value="<?= $p['id_pays'] ?>" <?= ($p['id_pays'] == ($user['id_pays'] ?? '')) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($p['nom_pays']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <button type="submit" name="update" class="btn-save">
+                    <i class="fas fa-save"></i>
+                    <span data-lang-fr="Enregistrer les modifications" data-lang-en="Save changes">Enregistrer les
+                        modifications</span>
+                </button>
+            </form>
+        </div>
+
+    </div>
+
+</body>
+
+</html>

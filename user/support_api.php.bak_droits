@@ -1,0 +1,56 @@
+<?php
+/**
+ * user/support_api.php : API du chat support côté utilisateur (parle uniquement avec l'admin)
+ *   GET  ?action=count                 -> { unread }
+ *   GET  ?action=poll&after=ID&open=1  -> { messages, unread, peer_read }
+ *   POST action=send (contenu, fichier) + en-tête X-CSRF-Token -> { message }
+ */
+require_once __DIR__ . '/../includes/session_boot.php';
+require_once __DIR__ . '/../connexion.php';
+require_once __DIR__ . '/../includes/support_lib.php';
+
+if (empty($_SESSION['user_id']) || empty($_SESSION['role']) || $_SESSION['role'] === 'admin') {
+    support_json(['error' => 'session'], 401);
+}
+require_once __DIR__ . '/../includes/auth_check.php';
+
+$uid = (int) $_SESSION['user_id'];
+$isPost = ($_SERVER['REQUEST_METHOD'] === 'POST');
+if ($isPost) {
+    support_check_post_size();
+}
+$action = $isPost ? ($_POST['action'] ?? '') : ($_GET['action'] ?? '');
+
+try {
+    support_ensure_table($pdo);
+    $csrfOk = $isPost ? support_csrf_ok() : true;
+    session_write_close();   // ne bloque pas les autres pages pendant le polling
+
+    if ($action === 'count') {
+        support_json(['unread' => support_unread_for_user($pdo, $uid)]);
+    }
+
+    if ($action === 'poll') {
+        $after = max(0, (int) ($_GET['after'] ?? 0));
+        if (!empty($_GET['open'])) {
+            support_mark_read($pdo, $uid, 'admin');
+        }
+        support_json([
+            'messages' => support_fetch($pdo, $uid, $after),
+            'unread' => !empty($_GET['open']) ? 0 : support_unread_for_user($pdo, $uid),
+            'peer_read' => support_peer_read($pdo, $uid, 'user'),
+        ]);
+    }
+
+    if ($action === 'send' && $isPost) {
+        if (!$csrfOk) {
+            support_json(['error' => 'Session expirée, rechargez la page.'], 403);
+        }
+        support_json(['message' => support_do_send($pdo, $uid, 'user', null, 8)]);
+    }
+
+    support_json(['error' => 'Action inconnue'], 400);
+} catch (Throwable $e) {
+    error_log('support_api(user): ' . $e->getMessage());
+    support_json(['error' => 'Erreur serveur'], 500);
+}

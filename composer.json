@@ -1,0 +1,8 @@
+{
+    "require": {
+        "aws/aws-sdk-php": "2.8.31",
+        "guzzle/guzzle": "3.9.3",
+        "imagekit/imagekit": "^4.0",
+        "phpmailer/phpmailer": "^7.1"
+    }
+}
