@@ -36,7 +36,11 @@
 
 ## 📂 Structure
 
+<<<<<<< HEAD
 
+=======
+```text
+>>>>>>> e9e65933b23c9d032d171a5aae1c7a3f7c7b6d1e
 BertinMovie/
 ├── admin/
 ├── user/
@@ -46,7 +50,11 @@ BertinMovie/
 ├── login.php
 ├── creation_compte.php
 └── ...
+<<<<<<< HEAD
 
+=======
+```
+>>>>>>> e9e65933b23c9d032d171a5aae1c7a3f7c7b6d1e
 
 ## 🔒 Security
 
@@ -59,4 +67,8 @@ BertinMovie/
 
 ## 👨‍💻 Author
 
+<<<<<<< HEAD
 **Bertin** — Software Engineering Student
+=======
+**Bertin** — Software Engineering Student
+>>>>>>> e9e65933b23c9d032d171a5aae1c7a3f7c7b6d1e
