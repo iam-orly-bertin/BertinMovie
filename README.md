@@ -36,6 +36,7 @@
 
 ## 📂 Structure
 
+```text
 BertinMovie/
 ├── admin/
 ├── user/
@@ -45,7 +46,7 @@ BertinMovie/
 ├── login.php
 ├── creation_compte.php
 └── ...
-
+```
 
 ## 🔒 Security
 
