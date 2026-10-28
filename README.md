@@ -36,10 +36,6 @@
 
 ## 📂 Structure
 
-<<<<<<< HEAD
-
-=======
-```text
 >>>>>>> e9e65933b23c9d032d171a5aae1c7a3f7c7b6d1e
 BertinMovie/
 ├── admin/
